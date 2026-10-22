@@ -279,7 +279,7 @@ ol.steps{list-style:none;margin:0;padding:0;max-height:560px;overflow:auto}
           <tr><td>F  FINE</td><td>Punto di arrivo, facoltativo</td></tr>
           <tr><td>A-07</td><td>Qualsiasi altro testo è un'ubicazione. Più codici nella stessa cella vanno separati da virgola.</td></tr>
         </table>
-        <p class="help">I colori delle celle Excel non vengono letti: usa i codici della tabella. Un codice prelievo più dettagliato, come A-07-03-B, viene associato alla cella A-07.</p>
+        <p class="help">I colori delle celle Excel non vengono letti: usa i codici della tabella. Un codice prelievo più dettagliato, come A-07-03-B, viene associato alla cella A-07. Il prelievo avviene dalla cella di corsia più vicina all'ubicazione, anche se è all'interno di un blocco di scaffali: gli scaffali non bloccano il prelievo, i muri X sì.</p>
       </div>
 
       <div class="tabpane" id="tab-opt" hidden>
@@ -415,7 +415,24 @@ function fmtDur(s){const h=Math.floor(s/3600),m=Math.round((s%3600)/60);return h
 
 /* ---------- pathfinding ---------- */
 function nbrs(i){const r=i/G.cols|0,c=i%G.cols,o=[];if(r>0)o.push(i-G.cols);if(r<G.rows-1)o.push(i+G.cols);if(c>0)o.push(i-1);if(c<G.cols-1)o.push(i+1);return o;}
-function access(i){return G.walk[i]?[i]:nbrs(i).filter(j=>G.walk[j]);}
+const accessCache=new Map();
+/* Punto di prelievo: la cella di corsia più vicina all'ubicazione.
+   Si cerca attraverso le altre ubicazioni (lo scaffale non è un ostacolo per il carrello che preleva dalla corsia),
+   ma mai attraverso muri X. Vengono tenute tutte le celle di corsia alla distanza minima. */
+function access(i){
+  if(G.walk[i])return[i];
+  if(accessCache.has(i))return accessCache.get(i);
+  const seen=new Set([i]);let frontier=[i];const found=[];
+  while(frontier.length&&!found.length){
+    const next=[];
+    for(const u of frontier)for(const v of nbrs(u)){
+      if(seen.has(v))continue;seen.add(v);
+      if(G.walk[v])found.push(v);else if(G.type[v]===2)next.push(v);
+    }
+    frontier=next;
+  }
+  accessCache.set(i,found);return found;
+}
 function bfsDist(src){
   const N=G.rows*G.cols,d=new Int32Array(N).fill(-1),q=new Int32Array(N);let h=0,t=0;
   d[src]=0;q[t++]=src;
@@ -587,7 +604,7 @@ function itemsFromFile(){
 
 /* ---------- mappa ---------- */
 function applyMap(){
-  G=buildGrid(parseTSV($('#mapTA').value));matchCache.clear();
+  G=buildGrid(parseTSV($('#mapTA').value));matchCache.clear();accessCache.clear();
   const m=$('#mapMsg');
   if(!G){m.innerHTML='<div class="msg">La mappa è vuota. Incolla le celle da Excel o carica un file.</div>';RG=RN=R=null;renderAll();return;}
   m.innerHTML=`<div class="msg ${G.start<0?'':'ok'}">${G.rows} righe × ${G.cols} colonne · ${nf(G.loc.size)} ubicazioni${G.start<0?' · <b>Manca la partenza</b>: scrivi S in una cella di corsia. Per ora l\'operatore parte dal primo prelievo.':''}</div>`;
@@ -668,6 +685,9 @@ function draw(){
     ctx.setLineDash([]);ctx.globalAlpha=1;}
   if(t>0){ctx.strokeStyle=TK.accent;ctx.lineWidth=lw;ctx.beginPath();const c0=ctr(R.pts[0]);ctx.moveTo(c0[0],c0[1]);
     for(let k=1;k<=Math.floor(t);k++){const c=ctr(R.pts[k]);ctx.lineTo(c[0],c[1]);}const pe=pointAt(t);ctx.lineTo(pe[0],pe[1]);ctx.stroke();}
+  ctx.save();ctx.strokeStyle=TK.accent;ctx.lineWidth=Math.max(1,cs*0.07);ctx.setLineDash([Math.max(2,cs*0.12),Math.max(2,cs*0.12)]);ctx.globalAlpha=0.9;ctx.beginPath();
+  R.segs.forEach(s=>{if(s.kind!=='pick'||s.status!=='ok'||t<s.b-1e-6)return;const a=ctr(R.pts[s.b]),b=ctr(s.idx);if(Math.abs(a[0]-b[0])+Math.abs(a[1]-b[1])<=cs*1.01)return;ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);});
+  ctx.stroke();ctx.restore();
   const visits=new Map();
   R.segs.forEach(s=>{if(s.kind!=='pick'||s.idx<0)return;if(!visits.has(s.idx))visits.set(s.idx,[]);visits.get(s.idx).push(s);});
   visits.forEach((list,idx)=>{
@@ -795,7 +815,7 @@ function hoverAt(clientX,clientY){
   else{h+=`<div style="margin-top:3px">Visitata ${v.length===1?'1 volta':v.length+' volte'}</div><div class="tl">`+
     v.slice(0,8).map(s=>`<span>n. ${s.n}</span><span>${s.dk?fmtDayS(s.dk):''}</span><span>${s.time||''}${s.status!=='ok'?' ⚠':''}</span>`).join('')+'</div>'+
     (v.length>8?`<div class="dim">e altre ${v.length-8}</div>`:'')+
-    (v.some(s=>s.status==='unreach')?'<div style="margin-top:4px">⚠ non raggiungibile dalla corsia</div>':'');}
+    (v.some(s=>s.status==='unreach')?'<div style="margin-top:4px">⚠ non raggiungibile: nessuna corsia collegata alla partenza senza passare da un muro X</div>':'');}
   tip.innerHTML=h;tip.hidden=false;
   const fr=floorEl.getBoundingClientRect();let x=clientX-fr.left+16,y=clientY-fr.top+16;
   const tw=tip.offsetWidth,th=tip.offsetHeight;
@@ -896,7 +916,7 @@ if(saved){$('#mapTA').value=saved.map;$('#seqTA').value=saved.seq||'';Object.ass
 else{$('#mapTA').value=SAMPLE_MAP;$('#seqTA').value=SAMPLE_SEQ;pSource='sample';}
 $('#oRet').checked=opts.ret;$('#oFuture').checked=opts.future;$('#oHeat').checked=opts.heat;$('#speed').value=opts.speed;
 setModeButtons();readTokens();
-G=buildGrid(parseTSV($('#mapTA').value));
+G=buildGrid(parseTSV($('#mapTA').value));accessCache.clear();
 if(pSource==='sample'){loadSamplePicks();}
 else{savedPC=saved&&saved.pc||null;$('#manualBox').open=true;
   if(pSource==='file')$('#pInfo').innerHTML='<div class="msg info">Ricarica il file dei prelievi: non resta salvato nel browser. Colonne e filtri scelti l\'ultima volta vengono riapplicati in automatico.</div>';
