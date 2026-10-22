@@ -66,6 +66,12 @@ button,input,select,textarea{font:inherit;color:inherit}
 .floor{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:10px;min-width:0}
 .canvas-wrap{overflow:auto;max-width:100%;border-radius:4px;line-height:0}
 canvas{display:block;touch-action:manipulation}
+.floor{position:relative}
+.tip{position:absolute;z-index:5;pointer-events:none;background:var(--ink);color:var(--paper);border-radius:8px;padding:9px 11px;font-size:12.5px;line-height:1.45;max-width:270px;box-shadow:0 6px 20px rgba(0,0,0,.25)}
+.tip b{font-family:var(--f-mono);font-size:14px;font-weight:500}
+.tip .tl{display:grid;grid-template-columns:auto auto auto;gap:1px 10px;margin-top:5px;font-variant-numeric:tabular-nums}
+.tip .tl span:first-child{opacity:.7}
+.tip .dim{opacity:.7}
 .hover{font-family:var(--f-mono);font-size:12.5px;color:var(--muted);min-height:1.4em}
 
 .controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;border-top:1px solid var(--line);padding-top:10px}
@@ -171,17 +177,18 @@ ol.steps{list-style:none;margin:0;padding:0;max-height:560px;overflow:auto}
   </section>
 
   <dl class="stats" id="stats">
-    <div class="stat"><dt>Prelievi</dt><dd id="sPicks">–</dd></div>
-    <div class="stat"><dt>Distanza a piedi</dt><dd id="sDist">–</dd></div>
-    <div class="stat"><dt>Tempo di cammino</dt><dd id="sTime">–</dd></div>
-    <div class="stat"><dt>Durata reale</dt><dd id="sReal">–</dd></div>
-    <div class="stat"><dt>Metri per prelievo</dt><dd id="sAvg">–</dd></div>
-    <div class="stat"><dt id="sCmpLabel">Con ordine più vicino</dt><dd id="sCmp">–</dd></div>
+    <div class="stat"><dt>Ubicazioni visitate</dt><dd id="sPicks">–</dd></div>
+    <div class="stat"><dt>Ubicazioni diverse</dt><dd id="sDistinct">–</dd></div>
+    <div class="stat"><dt>Tempo considerato</dt><dd id="sReal">–</dd></div>
+    <div class="stat"><dt>Ubicazioni all'ora</dt><dd id="sRate">–</dd></div>
+    <div class="stat"><dt>Tempo medio tra prelievi</dt><dd id="sGap">–</dd></div>
+    <div class="stat"><dt id="sCmpLabel">Percorso con ordine più vicino</dt><dd id="sCmp">–</dd></div>
   </dl>
 
   <main class="layout">
     <section class="floor" aria-label="Pianta del magazzino">
       <div class="canvas-wrap" id="wrap"><canvas id="cv" aria-label="Mappa del magazzino con il percorso dell'operatore"></canvas></div>
+      <div class="tip" id="tip" hidden></div>
       <div class="hover" id="hover">Passa sopra la mappa per leggere cella Excel e ubicazione.</div>
       <div class="controls">
         <div class="btns">
@@ -277,14 +284,10 @@ ol.steps{list-style:none;margin:0;padding:0;max-height:560px;overflow:auto}
 
       <div class="tabpane" id="tab-opt" hidden>
         <h3>Opzioni</h3>
-        <div class="row">
-          <label class="f" for="oMpc">Metri per cella <input type="number" id="oMpc" min="0.1" step="0.1" value="1"></label>
-          <label class="f" for="oKmh">Passo operatore (km/h) <input type="number" id="oKmh" min="0.5" step="0.1" value="3.6"></label>
-        </div>
         <label class="c"><input type="checkbox" id="oRet" checked><span>Ritorno al punto di arrivo (F) o alla partenza a fine giornata</span></label>
         <label class="c"><input type="checkbox" id="oFuture" checked><span>Mostra il percorso ancora da fare</span></label>
         <label class="c"><input type="checkbox" id="oHeat"><span>Mappa dei passaggi: evidenzia le celle percorse più volte</span></label>
-        <p class="help">"Ordine più vicino" ricalcola gli stessi prelievi andando ogni volta all'ubicazione più vicina, giorno per giorno. Serve come riferimento per capire quanto cammino si può risparmiare.</p>
+        <p class="help">"Ordine più vicino" ricalcola gli stessi prelievi andando ogni volta all'ubicazione più vicina, giorno per giorno. Il confronto è in percentuale di percorso, quindi non dipende dalla scala della mappa.</p>
       </div>
     </aside>
   </main>
@@ -445,7 +448,7 @@ function computeRoute(items){
   items.forEach((it,k)=>{
     if(k>0&&it.newDay){goBack('Fine giornata '+fmtDayShort(prevDk));if(dest>=0)cur=dest;}
     prevDk=it.dk;
-    const s={n:k+1,raw:it.raw,idx:it.idx,time:it.time,dk:it.dk,kind:'pick',a:pts.length-1,cells:0};
+    const s={n:k+1,raw:it.raw,idx:it.idx,time:it.time,sec:it.sec,dk:it.dk,kind:'pick',a:pts.length-1,cells:0};
     if(it.idx<0)s.status='missing';
     else{const acc=access(it.idx),p=acc.length?bfsPath(cur,acc):null;
       if(!p)s.status='unreach';else{for(let j=1;j<p.length;j++)pts.push(p[j]);s.cells=p.length-1;cur=p[p.length-1];s.status='ok';}}
@@ -487,9 +490,6 @@ function pcToNames(){if(!P)return savedPC;const h=P.headers;return{loc:h[PC.loc]
 function save(){try{localStorage.setItem(LS,JSON.stringify({map:$('#mapTA').value,seq:$('#seqTA').value,opts,origin,mode,pSource,pc:pcToNames()}));}catch(e){}}
 function load(){try{const s=JSON.parse(localStorage.getItem(LS)||'null');if(s&&s.map)return s;}catch(e){}return null;}
 
-const meters=c=>c*opts.mpc;
-function fmtM(c){const v=meters(c);return(v<10&&v%1?v.toFixed(1).replace('.',','):Math.round(v).toLocaleString('it-IT'))+' m';}
-function fmtT(c){const s=Math.round(meters(c)/(opts.kmh/3.6));return s>=3600?fmtDur(s):(Math.floor(s/60)?`${Math.floor(s/60)} min ${String(s%60).padStart(2,'0')} s`:`${s} s`);}
 const esc=s=>String(s).replace(/[&<>"]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
 const nf=n=>n.toLocaleString('it-IT');
 
@@ -692,29 +692,37 @@ function realDuration(items){
   const by=new Map();items.forEach(it=>{if(it.sec==null)return;const k=it.dk||'';const v=by.get(k)||[Infinity,-Infinity];v[0]=Math.min(v[0],it.sec);v[1]=Math.max(v[1],it.sec);by.set(k,v);});
   if(!by.size)return null;let s=0;by.forEach(v=>s+=v[1]-v[0]);return s;
 }
+function fmtGap(sec){sec=Math.round(sec);if(sec<60)return sec+' s';const m=Math.floor(sec/60),r=sec%60;return m<60?`${m} min${r?' '+String(r).padStart(2,'0')+' s':''}`:fmtDur(sec);}
 function renderStats(){
-  const ids=['sPicks','sDist','sTime','sReal','sAvg','sCmp'].map(i=>$('#'+i));
+  const ids=['sPicks','sDistinct','sReal','sRate','sGap','sCmp'].map(i=>$('#'+i));
   if(!R){ids.forEach(e=>e.textContent='–');return;}
-  const tot=R.segs.filter(s=>s.kind==='pick').length;
-  ids[0].innerHTML=`${nf(R.ok)}<small>/ ${nf(tot)}</small>`;
-  ids[1].textContent=fmtM(R.cells);ids[2].textContent=fmtT(R.cells);
-  const rd=realDuration(curItems);ids[3].textContent=rd==null?'–':fmtDur(rd);
-  ids[4].textContent=R.ok?fmtM(R.cells/R.ok):'–';
-  $('#sCmpLabel').textContent=mode==='given'?'Con ordine più vicino':'Con ordine reale';
-  if(RN&&RG.cells>0){const other=mode==='given'?RN:RG,pct=(other.cells-R.cells)/R.cells*100;
+  const items=curItems,n=items.length,inMap=items.filter(i=>i.idx>=0).length;
+  ids[0].innerHTML=nf(n)+(inMap<n?`<small>${nf(inMap)} in mappa</small>`:'');
+  ids[1].textContent=nf(new Set(items.map(i=>i.code)).size);
+  const rd=realDuration(items);
+  ids[2].textContent=rd==null||rd<=0?'–':fmtDur(rd);
+  ids[3].textContent=rd&&rd>0?(n/(rd/3600)).toLocaleString('it-IT',{maximumFractionDigits:1}):'–';
+  const days=new Set(items.filter(i=>i.sec!=null).map(i=>i.dk)).size;
+  ids[4].textContent=rd&&rd>0&&n-days>0?fmtGap(rd/(n-days)):'–';
+  $('#sCmpLabel').textContent=mode==='given'?'Percorso con ordine più vicino':'Percorso con ordine reale';
+  if(RN&&RG.cells>0&&RN.cells>0){const other=mode==='given'?RN:RG,pct=Math.round((other.cells-R.cells)/R.cells*100);
     const cls=other.cells<R.cells?'delta-good':other.cells>R.cells?'delta-bad':'';
-    ids[5].innerHTML=`${fmtM(other.cells)}<small class="${cls}">${pct>0?'+':''}${Math.round(pct)}%</small>`;}
+    ids[5].innerHTML=`<span class="${cls}">${pct>0?'+':''}${pct}%</span><small>${pct<0?'più corto':pct>0?'più lungo':'uguale'}</small>`;}
   else ids[5].innerHTML=RN===null&&RG?'<small style="margin:0">troppi prelievi</small>':'–';
 }
+const fmtDayS=dk=>dk?new Date(dk+'T00:00:00Z').toLocaleDateString('it-IT',{weekday:'short',day:'2-digit',month:'2-digit',timeZone:'UTC'}):'';
 function renderList(){
   const ol=$('#steps');
   if(!R||!R.segs.length){ol.innerHTML=`<li class="empty">${P?'Nessun prelievo da mostrare con i filtri scelti.':'Carica il file dei prelievi nella scheda Prelievi per vedere i passi.'}</li>`;$('#tabStepsBtn').textContent='Passi';return;}
-  let cum=0;
+  let prev=null;
   ol.innerHTML=R.segs.map((s,k)=>{
-    cum+=s.cells;const ok=s.status==='ok';
-    const where=s.kind==='ret'?'Rientro':s.status==='missing'?'Non trovata in mappa':s.status==='unreach'?'Non raggiungibile':(s.cells===0&&k>0?'Stessa posizione':'Cella '+cellRef(s.idx));
-    const sub=(s.time?s.time+' · ':'')+where;
-    return `<li class="step ${ok?'':'bad'} ${s.kind==='ret'?'ret':''}" data-k="${k}"><span class="num">${s.kind==='ret'?'↩':s.n}</span><span class="code">${esc(s.raw)}</span><span class="dist">${ok?'+'+fmtM(s.cells):'–'}</span><span class="sub">${esc(sub)}</span><span class="cum">${ok?fmtM(cum):''}</span></li>`;
+    const ok=s.status==='ok';
+    if(s.kind==='ret'){prev=null;return `<li class="step ret ${ok?'':'bad'}" data-k="${k}"><span class="num">↩</span><span class="code">${esc(s.raw)}</span><span class="dist"></span><span class="sub">Rientro alla partenza</span><span class="cum"></span></li>`;}
+    const where=s.status==='missing'?'Non trovata in mappa':s.status==='unreach'?'Non raggiungibile':'Cella '+cellRef(s.idx);
+    const sub=(s.dk?fmtDayS(s.dk)+' · ':'')+where;
+    let gap='';if(prev&&prev.sec!=null&&s.sec!=null&&prev.dk===s.dk&&mode==='given')gap='+'+fmtGap(s.sec-prev.sec);
+    prev=s;
+    return `<li class="step ${ok?'':'bad'}" data-k="${k}"><span class="num">${s.n}</span><span class="code">${esc(s.raw)}</span><span class="dist">${s.time||''}</span><span class="sub">${esc(sub)}</span><span class="cum">${gap}</span></li>`;
   }).join('');
   $('#tabStepsBtn').textContent=`Passi (${nf(R.segs.filter(s=>s.kind==='pick').length)})`;
 }
@@ -724,12 +732,13 @@ function renderProgress(force){
   if(!R||!R.stops.length){sc.max=0;sc.value=0;st.textContent=G?'Nessun percorso da mostrare':'Carica una mappa';return;}
   const done=R.stops.filter(b=>t>=b-1e-6).length;sc.max=R.stops.length;sc.value=done;
   const cur=curSeg(),last=[...R.segs].reverse().find(s=>s.status==='ok'&&t>=s.b-1e-6);
-  const tm=s=>s&&s.time?` alle ${s.time}`:'';
+  const tot=R.segs.filter(s=>s.kind==='pick').length;
+  const tm=s=>s&&(s.dk||s.time)?` · ${s.dk?fmtDayS(s.dk)+' ':''}${s.time?s.time.slice(0,5):''}`:'';
   let txt;
   if(t<=0)txt=`Pronto alla partenza · primo prelievo: <b>${esc(cur?cur.raw:'')}</b>${tm(cur)}`;
-  else if(!cur)txt=`Giro completato · <b>${fmtM(R.cells)}</b> a piedi in ${fmtT(R.cells)}`;
-  else if(dwell>0&&last)txt=`${last.kind==='ret'?esc(last.raw):'Prelievo '+last.n+': <b>'+esc(last.raw)+'</b>'+tm(last)} · ${fmtM(t)} percorsi`;
-  else txt=`${cur.kind==='ret'?'Rientro':'Verso prelievo '+cur.n}: <b>${esc(cur.raw)}</b>${tm(cur)} · ${fmtM(t)} percorsi`;
+  else if(!cur)txt=`Giro completato · ${nf(R.ok)} ubicazioni visitate`;
+  else if(dwell>0&&last)txt=last.kind==='ret'?esc(last.raw):`Prelievo ${last.n} di ${nf(tot)}: <b>${esc(last.raw)}</b>${tm(last)}`;
+  else txt=cur.kind==='ret'?'Rientro alla partenza':`Verso prelievo ${cur.n} di ${nf(tot)}: <b>${esc(cur.raw)}</b>${tm(cur)}`;
   st.innerHTML=txt;
   const key=done+'|'+(cur?R.segs.indexOf(cur):-1);
   if(key===lastKey&&!force)return;lastKey=key;
@@ -772,17 +781,31 @@ document.addEventListener('keydown',e=>{if(/INPUT|TEXTAREA|SELECT/.test(e.target
   if(e.key===' '){e.preventDefault();$('#bPlay').click();}else if(e.key==='ArrowRight')$('#bNext').click();else if(e.key==='ArrowLeft')$('#bPrev').click();});
 
 /* ---------- hover ---------- */
+const tip=$('#tip'),floorEl=document.querySelector('.floor');
 function hoverAt(clientX,clientY){
   if(!G)return;const rc=cv.getBoundingClientRect(),c=Math.floor((clientX-rc.left)/CS),r=Math.floor((clientY-rc.top)/CS);
-  if(c<0||r<0||c>=G.cols||r>=G.rows)return;const i=r*G.cols+c,ty=G.type[i];
+  if(c<0||r<0||c>=G.cols||r>=G.rows){tip.hidden=true;return;}const i=r*G.cols+c,ty=G.type[i];
   let d=ty===1?'muro / ostacolo':ty===2?'ubicazione '+G.label[i]:ty===3?'partenza':ty===4?'arrivo':'corsia';
   if(R&&R.heat&&R.heat[i]&&G.walk[i])d+=` · passaggi: ${R.heat[i]}`;
-  if(R&&ty===2){const v=R.segs.filter(s=>s.idx===i&&s.kind==='pick').map(s=>s.n+(s.time?' ('+s.time.slice(0,5)+')':''));if(v.length)d+=` · prelievo n. ${v.slice(0,8).join(', ')}${v.length>8?'…':''}`;}
   $('#hover').textContent=`Cella ${cellRef(i)} · ${d}`;
+  if(ty!==2){tip.hidden=true;return;}
+  const v=R?R.segs.filter(s=>s.idx===i&&s.kind==='pick'):[];
+  let h=`<b>${esc(G.label[i])}</b> <span class="dim">· cella ${cellRef(i)}</span>`;
+  if(!v.length)h+=`<div class="dim" style="margin-top:4px">Non visitata nei prelievi selezionati</div>`;
+  else{h+=`<div style="margin-top:3px">Visitata ${v.length===1?'1 volta':v.length+' volte'}</div><div class="tl">`+
+    v.slice(0,8).map(s=>`<span>n. ${s.n}</span><span>${s.dk?fmtDayS(s.dk):''}</span><span>${s.time||''}${s.status!=='ok'?' ⚠':''}</span>`).join('')+'</div>'+
+    (v.length>8?`<div class="dim">e altre ${v.length-8}</div>`:'')+
+    (v.some(s=>s.status==='unreach')?'<div style="margin-top:4px">⚠ non raggiungibile dalla corsia</div>':'');}
+  tip.innerHTML=h;tip.hidden=false;
+  const fr=floorEl.getBoundingClientRect();let x=clientX-fr.left+16,y=clientY-fr.top+16;
+  const tw=tip.offsetWidth,th=tip.offsetHeight;
+  if(x+tw>fr.width-8)x=clientX-fr.left-tw-16;if(x<8)x=8;
+  if(y+th>fr.height-8)y=clientY-fr.top-th-16;if(y<8)y=8;
+  tip.style.left=x+'px';tip.style.top=y+'px';
 }
 cv.addEventListener('mousemove',e=>hoverAt(e.clientX,e.clientY));
 cv.addEventListener('click',e=>hoverAt(e.clientX,e.clientY));
-
+cv.addEventListener('mouseleave',()=>{tip.hidden=true;});
 /* ---------- schede e comandi ---------- */
 document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('.tabs button').forEach(x=>x.setAttribute('aria-selected',x===b?'true':'false'));
@@ -802,7 +825,7 @@ $('#bCopy').onclick=async()=>{const ta=$('#mapTA'),b=$('#bCopy');
 function bindOpt(id,key,num){const el=$('#'+id);el.addEventListener(num?'input':'change',()=>{
   if(num){const v=parseFloat(String(el.value).replace(',','.'));if(!(v>0))return;opts[key]=v;}else opts[key]=el.checked;
   if(key==='ret')recompute();else{renderAll();save();}});}
-bindOpt('oMpc','mpc',1);bindOpt('oKmh','kmh',1);bindOpt('oRet','ret');bindOpt('oFuture','future');bindOpt('oHeat','heat');
+bindOpt('oRet','ret');bindOpt('oFuture','future');bindOpt('oHeat','heat');
 
 // filtri
 $('#fItems').addEventListener('change',e=>{const s=e.target.closest('select[data-f]');if(!s)return;PC.filters[+s.dataset.f].val=s.value;refreshFilters();recompute();});
@@ -871,7 +894,7 @@ $('#sheetMap').onchange=useMapSheet;
 const saved=load();
 if(saved){$('#mapTA').value=saved.map;$('#seqTA').value=saved.seq||'';Object.assign(opts,saved.opts||{});origin=saved.origin||origin;mode=saved.mode==='nn'?'nn':'given';pSource=saved.pSource||'manual';}
 else{$('#mapTA').value=SAMPLE_MAP;$('#seqTA').value=SAMPLE_SEQ;pSource='sample';}
-$('#oMpc').value=opts.mpc;$('#oKmh').value=opts.kmh;$('#oRet').checked=opts.ret;$('#oFuture').checked=opts.future;$('#oHeat').checked=opts.heat;$('#speed').value=opts.speed;
+$('#oRet').checked=opts.ret;$('#oFuture').checked=opts.future;$('#oHeat').checked=opts.heat;$('#speed').value=opts.speed;
 setModeButtons();readTokens();
 G=buildGrid(parseTSV($('#mapTA').value));
 if(pSource==='sample'){loadSamplePicks();}
