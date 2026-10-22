@@ -1,0 +1,636 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tracciato Picking</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+/* Layout: pianta del magazzino a sinistra (il lavoro), pannello operativo a destra; su telefono si impila. */
+:root{
+  --paper:#F2F4F3; --panel:#FFFFFF; --line:#D5DBD9; --ink:#1B2427; --muted:#5D6A6E;
+  --floor:#E4E8E6; --grid:#D3D9D6; --wall:#394246; --rack:#2C5B8B; --rack-edge:#1E4670; --rack-ink:#EAF2FA;
+  --accent:#DC5E17; --accent-soft:#FBE7DA; --done:#2B8A55; --bad:#BF3328; --heat:#DC5E17;
+  --f-display:"Barlow Condensed","Arial Narrow",Arial,sans-serif;
+  --f-body:"Barlow",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --paper:#131719; --panel:#1B2023; --line:#2D3539; --ink:#E5EBEC; --muted:#93A0A4;
+  --floor:#21272A; --grid:#2B3236; --wall:#08090A; --rack:#3A6DA3; --rack-edge:#2A5687; --rack-ink:#F1F6FB;
+  --accent:#F07A33; --accent-soft:#3A2618; --done:#4BB679; --bad:#E5584C; --heat:#F07A33; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --paper:#131719; --panel:#1B2023; --line:#2D3539; --ink:#E5EBEC; --muted:#93A0A4;
+  --floor:#21272A; --grid:#2B3236; --wall:#08090A; --rack:#3A6DA3; --rack-edge:#2A5687; --rack-ink:#F1F6FB;
+  --accent:#F07A33; --accent-soft:#3A2618; --done:#4BB679; --bad:#E5584C; --heat:#F07A33; color-scheme:dark}
+
+*{box-sizing:border-box}
+body{background:var(--paper);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.45;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 40px}
+.shell{max-width:1320px;margin:0 auto;display:flex;flex-direction:column;gap:16px}
+button,input,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+.top{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px 24px}
+.brand h1{font-family:var(--f-display);font-weight:700;font-size:clamp(28px,4vw,38px);line-height:1;margin:0;letter-spacing:.01em;text-transform:uppercase;display:flex;align-items:center;gap:10px}
+.brand h1 .stripe{width:28px;height:22px;border-radius:2px;background:repeating-linear-gradient(-45deg,var(--accent) 0 5px,var(--ink) 5px 10px)}
+.brand p{margin:6px 0 0;color:var(--muted)}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:3px;gap:3px}
+.seg button{border:0;background:transparent;padding:7px 12px;border-radius:6px;cursor:pointer;font-weight:500;color:var(--muted)}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--paper)}
+
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.stat{background:var(--panel);padding:10px 14px;min-width:0}
+.stat dt{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600}
+.stat dd{margin:2px 0 0;font-family:var(--f-display);font-size:26px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.1}
+.stat dd small{font-family:var(--f-body);font-size:13px;font-weight:500;color:var(--muted);margin-left:4px}
+.delta-good{color:var(--done)} .delta-bad{color:var(--bad)}
+
+.note{background:var(--accent-soft);border:1px solid var(--line);border-radius:8px;padding:9px 14px;font-size:14px}
+
+.layout{display:grid;grid-template-columns:minmax(0,1fr) 350px;gap:16px;align-items:start}
+@media (max-width:920px){.layout{grid-template-columns:minmax(0,1fr)}}
+.floor{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.canvas-wrap{overflow:auto;max-width:100%;border-radius:4px;line-height:0}
+canvas{display:block;touch-action:manipulation}
+.hover{font-family:var(--f-mono);font-size:12.5px;color:var(--muted);min-height:1.4em}
+
+.controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;border-top:1px solid var(--line);padding-top:10px}
+.btns{display:flex;gap:4px}
+.ib{width:38px;height:38px;display:grid;place-items:center;border:1px solid var(--line);background:var(--panel);border-radius:8px;cursor:pointer}
+.ib:hover{border-color:var(--muted)}
+.ib.play{background:var(--accent);border-color:var(--accent);color:#fff;width:46px}
+.ib svg{width:18px;height:18px;fill:currentColor}
+.scrub{flex:1 1 200px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.scrub input{width:100%;accent-color:var(--accent)}
+.status{font-size:13.5px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.status b{font-family:var(--f-mono);font-weight:500}
+.speed{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+.speed input{width:90px;accent-color:var(--accent)}
+
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12.5px;color:var(--muted)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.sw{width:13px;height:13px;border-radius:2px;display:inline-block}
+.sw.rack{background:var(--rack)} .sw.wall{background:var(--wall)} .sw.floor{background:var(--floor);border:1px solid var(--grid)}
+.sw.path{height:4px;width:18px;background:var(--accent);border-radius:2px}
+.sw.dot{border-radius:50%;background:var(--done)} .sw.todo{border-radius:50%;border:2px solid var(--accent);background:var(--panel)}
+
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;display:flex;flex-direction:column;min-width:0}
+.tabs{display:flex;border-bottom:1px solid var(--line);overflow-x:auto}
+.tabs button{flex:1 0 auto;border:0;background:none;padding:11px 12px;cursor:pointer;font-weight:600;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;font-size:14px}
+.tabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent)}
+.tabpane{padding:14px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.tabpane h3{margin:0;font-family:var(--f-display);font-size:18px;font-weight:600;text-transform:uppercase;letter-spacing:.03em}
+.help{font-size:13px;color:var(--muted);margin:0}
+textarea{width:100%;min-height:200px;resize:vertical;border:1px solid var(--line);border-radius:8px;background:var(--paper);padding:10px;font-family:var(--f-mono);font-size:12.5px;line-height:1.5;white-space:pre;overflow:auto}
+#mapTA{min-height:150px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.btn{border:1px solid var(--line);background:var(--panel);padding:8px 12px;border-radius:8px;cursor:pointer;font-weight:500;font-size:14px}
+.btn:hover{border-color:var(--muted)}
+.btn.primary{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.file{display:flex;flex-direction:column;gap:6px;border:1px dashed var(--line);border-radius:8px;padding:12px}
+.file input{font-size:13px;max-width:100%}
+label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;font-weight:500;flex:1 1 130px;min-width:0}
+label.f select,label.f input[type=number]{border:1px solid var(--line);border-radius:6px;background:var(--paper);padding:6px 8px;width:100%}
+label.c{display:flex;gap:8px;align-items:flex-start;font-size:14px;cursor:pointer}
+label.c input{accent-color:var(--accent);margin-top:3px}
+.msg{font-size:13px;border-radius:6px;padding:8px 10px;background:var(--paper);border-left:3px solid var(--bad)}
+.msg.ok{border-left-color:var(--done)}
+.syntax{width:100%;border-collapse:collapse;font-size:13px}
+.syntax td{padding:5px 6px;border-top:1px solid var(--line);vertical-align:top}
+.syntax td:first-child{font-family:var(--f-mono);white-space:nowrap;font-weight:500}
+
+ol.steps{list-style:none;margin:0;padding:0;max-height:560px;overflow:auto}
+.step{display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:2px 10px;align-items:center;padding:8px 14px;border-top:1px solid var(--line);cursor:pointer}
+.step:first-child{border-top:0}
+.step:hover{background:var(--paper)}
+.num{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-family:var(--f-display);font-weight:600;font-size:14px;border:2px solid var(--accent);grid-row:span 2}
+.code{font-family:var(--f-mono);font-weight:500;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dist{font-variant-numeric:tabular-nums;font-size:14px;text-align:right;font-weight:600}
+.sub{font-size:12px;color:var(--muted);grid-column:2}
+.cum{font-size:12px;color:var(--muted);text-align:right;font-variant-numeric:tabular-nums}
+.step.done .num{background:var(--done);border-color:var(--done);color:#fff}
+.step.current{background:var(--accent-soft)}
+.step.current .num{background:var(--accent);color:#fff}
+.step.bad .num{border-color:var(--bad);color:var(--bad)}
+.step.bad .sub{color:var(--bad)}
+.step.ret .num{border-color:var(--ink)}
+.empty{padding:20px 14px;color:var(--muted);font-size:14px}
+@media (prefers-reduced-motion: reduce){*{scroll-behavior:auto!important}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="top">
+    <div class="brand">
+      <h1><span class="stripe" aria-hidden="true"></span>Tracciato Picking</h1>
+      <p>Mappa del magazzino da Excel, sequenza di prelievo, percorso dell'operatore passo per passo.</p>
+    </div>
+    <div class="seg" role="group" aria-label="Ordine dei prelievi">
+      <button id="modeGiven" aria-pressed="true">Sequenza data</button>
+      <button id="modeNN" aria-pressed="false">Ordine più vicino</button>
+    </div>
+  </header>
+
+  <dl class="stats" id="stats">
+    <div class="stat"><dt>Prelievi</dt><dd id="sPicks">–</dd></div>
+    <div class="stat"><dt>Distanza totale</dt><dd id="sDist">–</dd></div>
+    <div class="stat"><dt>Tempo di cammino</dt><dd id="sTime">–</dd></div>
+    <div class="stat"><dt>Metri per prelievo</dt><dd id="sAvg">–</dd></div>
+    <div class="stat"><dt id="sCmpLabel">Con ordine più vicino</dt><dd id="sCmp">–</dd></div>
+  </dl>
+
+  <div class="note" id="sampleNote" hidden>Stai vedendo una mappa e una sequenza di esempio. Carica il tuo Excel nella scheda <b>Mappa</b> e incolla le ubicazioni nella scheda <b>Sequenza</b>.</div>
+
+  <main class="layout">
+    <section class="floor" aria-label="Pianta del magazzino">
+      <div class="canvas-wrap" id="wrap"><canvas id="cv" aria-label="Mappa del magazzino con il percorso dell'operatore"></canvas></div>
+      <div class="hover" id="hover">Passa sopra la mappa per leggere cella Excel e ubicazione.</div>
+      <div class="controls">
+        <div class="btns">
+          <button class="ib" id="bStart" aria-label="Torna alla partenza"><svg viewBox="0 0 24 24"><path d="M6 5h2v14H6zM20 5v14L9 12z"/></svg></button>
+          <button class="ib" id="bPrev" aria-label="Prelievo precedente"><svg viewBox="0 0 24 24"><path d="M18 5v14L7 12z"/></svg></button>
+          <button class="ib play" id="bPlay" aria-label="Avvia"><svg viewBox="0 0 24 24" id="playIcon"><path d="M7 4v16l13-8z"/></svg></button>
+          <button class="ib" id="bNext" aria-label="Prelievo successivo"><svg viewBox="0 0 24 24"><path d="M6 5v14l11-7z"/></svg></button>
+          <button class="ib" id="bEnd" aria-label="Vai alla fine"><svg viewBox="0 0 24 24"><path d="M16 5h2v14h-2zM4 5v14l11-7z"/></svg></button>
+        </div>
+        <div class="scrub">
+          <input type="range" id="scrub" min="0" max="0" value="0" aria-label="Avanzamento prelievi">
+          <div class="status" id="status">Pronto alla partenza</div>
+        </div>
+        <label class="speed" for="speed">Velocità <input type="range" id="speed" min="2" max="40" value="8"></label>
+      </div>
+      <div class="legend">
+        <span><i class="sw floor"></i>Corsia</span>
+        <span><i class="sw rack"></i>Ubicazione</span>
+        <span><i class="sw wall"></i>Muro / ostacolo</span>
+        <span><i class="sw path"></i>Percorso fatto</span>
+        <span><i class="sw dot"></i>Prelevato</span>
+        <span><i class="sw todo"></i>Da prelevare</span>
+      </div>
+    </section>
+
+    <aside class="panel">
+      <div class="tabs" role="tablist">
+        <button role="tab" aria-selected="true" data-tab="steps" id="tabStepsBtn">Passi</button>
+        <button role="tab" aria-selected="false" data-tab="seq">Sequenza</button>
+        <button role="tab" aria-selected="false" data-tab="map">Mappa</button>
+        <button role="tab" aria-selected="false" data-tab="opt">Opzioni</button>
+      </div>
+
+      <div class="tabpane" id="tab-steps" style="padding:0"><ol class="steps" id="steps"></ol></div>
+
+      <div class="tabpane" id="tab-seq" hidden>
+        <h3>Sequenza di prelievo</h3>
+        <p class="help">Una ubicazione per riga, nell'ordine in cui l'operatore le ha prelevate. Puoi incollare più colonne da Excel: viene usata la prima cella riconosciuta nella mappa. Un codice più dettagliato, come <b>A-07-03-B</b>, viene associato alla cella <b>A-07</b>.</p>
+        <textarea id="seqTA" spellcheck="false" aria-label="Sequenza di prelievo"></textarea>
+        <div id="seqMsg"></div>
+      </div>
+
+      <div class="tabpane" id="tab-map" hidden>
+        <h3>Mappa del magazzino</h3>
+        <div class="file">
+          <label class="f" for="fileIn">Carica file Excel o CSV
+            <input type="file" id="fileIn" accept=".xlsx,.xls,.xlsm,.csv,.ods">
+          </label>
+          <div class="row" id="sheetRow" hidden>
+            <label class="f" for="sheetMap">Foglio mappa <select id="sheetMap"></select></label>
+            <label class="f" for="sheetSeq">Foglio sequenza <select id="sheetSeq"></select></label>
+          </div>
+        </div>
+        <p class="help">Oppure seleziona le celle in Excel, copia e incolla qui sotto.</p>
+        <textarea id="mapTA" spellcheck="false" aria-label="Mappa in formato tabellare"></textarea>
+        <div id="mapMsg"></div>
+        <div class="row">
+          <button class="btn" id="bSample">Carica esempio</button>
+          <button class="btn" id="bCopy">Copia mappa per Excel</button>
+        </div>
+        <table class="syntax">
+          <tr><td>(vuota) o .</td><td>Corsia percorribile</td></tr>
+          <tr><td>X  #  MURO</td><td>Muro, colonna, ostacolo</td></tr>
+          <tr><td>S  PARTENZA</td><td>Punto di partenza dell'operatore</td></tr>
+          <tr><td>F  FINE</td><td>Punto di arrivo, facoltativo</td></tr>
+          <tr><td>A-07</td><td>Qualsiasi altro testo è un'ubicazione. Più codici nella stessa cella vanno separati da virgola.</td></tr>
+        </table>
+        <p class="help">I colori delle celle Excel non vengono letti: usa i codici della tabella. L'operatore preleva stando nella corsia accanto all'ubicazione e si muove in orizzontale e verticale.</p>
+      </div>
+
+      <div class="tabpane" id="tab-opt" hidden>
+        <h3>Opzioni</h3>
+        <div class="row">
+          <label class="f" for="oMpc">Metri per cella <input type="number" id="oMpc" min="0.1" step="0.1" value="1"></label>
+          <label class="f" for="oKmh">Passo operatore (km/h) <input type="number" id="oKmh" min="0.5" step="0.1" value="3.6"></label>
+        </div>
+        <label class="c"><input type="checkbox" id="oRet" checked><span>Ritorno al punto di arrivo (F) o alla partenza dopo l'ultimo prelievo</span></label>
+        <label class="c"><input type="checkbox" id="oFuture" checked><span>Mostra il percorso ancora da fare</span></label>
+        <label class="c"><input type="checkbox" id="oHeat"><span>Mappa dei passaggi: evidenzia le celle percorse più volte</span></label>
+        <p class="help">"Ordine più vicino" ricalcola la stessa lista andando ogni volta all'ubicazione più vicina. Serve come riferimento per capire quanto cammino si può risparmiare.</p>
+      </div>
+    </aside>
+  </main>
+</div>
+
+<script>
+(function(){
+"use strict";
+const LS='tracciato-picking.v1';
+const $=s=>document.querySelector(s);
+const SAMPLE_SEQ=['A-07','D-14','B-03','A-22','E-09','B-20','F-04','C-13','D-02','F-21','C-24','E-16'].join('\n');
+
+function sampleRows(){
+  const R=20,C=26,g=[];
+  for(let r=0;r<R;r++)g.push(new Array(C).fill(''));
+  for(let r=0;r<R;r++)for(let c=0;c<C;c++)if(r===0||r===R-1||c===0||c===C-1)g[r][c]='X';
+  const pos=[3,4,5,6,7,8,10,11,12,13,14,15];
+  'ABCDEF'.split('').forEach((L,k)=>{
+    const lc=1+4*k,rc=4+4*k;
+    pos.forEach((r,p)=>{g[r][lc]=L+'-'+String(2*p+1).padStart(2,'0');g[r][rc]=L+'-'+String(2*p+2).padStart(2,'0');});
+  });
+  g[9][5]='X';g[9][13]='X';g[9][21]='X';
+  g[18][13]='S';
+  return g;
+}
+const rowsToTSV=rows=>rows.map(r=>r.map(v=>String(v==null?'':v).replace(/[\r\n]+/g,',').replace(/\t/g,' ')).join('\t')).join('\n');
+const SAMPLE_MAP=rowsToTSV(sampleRows());
+
+/* ---------- parsing ---------- */
+const norm=s=>String(s==null?'':s).trim().toUpperCase().replace(/\s+/g,'');
+const strip=s=>s.replace(/[^A-Z0-9]/g,'');
+const WALL=new Set(['X','#','XX','MURO','OSTACOLO']),START=new Set(['S','START','PARTENZA']),END=new Set(['F','FINE','ARRIVO','END']);
+function parseTSV(text){
+  const lines=String(text||'').replace(/\r/g,'').split('\n');
+  while(lines.length&&lines[lines.length-1].trim()==='')lines.pop();
+  return lines.map(l=>l.split('\t'));
+}
+function colName(n){let s='';n++;while(n>0){const m=(n-1)%26;s=String.fromCharCode(65+m)+s;n=(n-m-1)/26|0;}return s;}
+
+function buildGrid(rows){
+  const filled=v=>String(v==null?'':v).trim()!=='';
+  let r0=-1,r1=-1,c0=Infinity,c1=-1;
+  rows.forEach((row,r)=>row.forEach((v,c)=>{if(filled(v)){if(r0<0)r0=r;r1=r;c0=Math.min(c0,c);c1=Math.max(c1,c);}}));
+  if(r0<0)return null;
+  const rowsN=r1-r0+1,cols=c1-c0+1,N=rowsN*cols;
+  const g={rows:rowsN,cols,trimR:r0,trimC:c0,type:new Uint8Array(N),walk:new Uint8Array(N),label:new Array(N).fill(''),start:-1,end:-1,loc:new Map(),locStrip:new Map(),keys:[]};
+  for(let r=0;r<rowsN;r++)for(let c=0;c<cols;c++){
+    const i=r*cols+c,raw=String((rows[r+r0]||[])[c+c0]??'').trim(),u=norm(raw);
+    if(u===''||u==='.'){g.walk[i]=1;}
+    else if(WALL.has(u)){g.type[i]=1;}
+    else if(START.has(u)){g.type[i]=3;g.walk[i]=1;if(g.start<0)g.start=i;}
+    else if(END.has(u)){g.type[i]=4;g.walk[i]=1;if(g.end<0)g.end=i;}
+    else{
+      g.type[i]=2;g.label[i]=raw.replace(/[\r\n]+/g,',');
+      raw.split(/[,;\n]+/).map(norm).filter(Boolean).forEach(code=>{
+        if(!g.loc.has(code)){g.loc.set(code,i);g.keys.push(code);}
+        const st=strip(code);if(st&&!g.locStrip.has(st))g.locStrip.set(st,i);
+      });
+    }
+  }
+  g.keys.sort((a,b)=>b.length-a.length);
+  return g;
+}
+function matchCode(q){
+  if(!G||!q)return -1;
+  if(G.loc.has(q))return G.loc.get(q);
+  for(const k of G.keys){if(q.length>k.length&&q.startsWith(k)&&/[-_./]/.test(q[k.length]))return G.loc.get(k);}
+  const st=strip(q);if(st&&G.locStrip.has(st))return G.locStrip.get(st);
+  return -1;
+}
+function parseSeq(text){
+  const out=[];const lines=String(text||'').replace(/\r/g,'').split('\n');
+  let first=true;
+  for(const line of lines){
+    const cells=line.split(/\t|;/).map(s=>s.trim()).filter(Boolean);
+    if(!cells.length)continue;
+    let hit=null;
+    for(const c of cells){const n=norm(c),idx=matchCode(n);if(idx>=0){hit={raw:c,code:n,idx};break;}}
+    if(!hit){
+      if(first&&!/\d/.test(line)){first=false;continue;}
+      hit={raw:cells[0],code:norm(cells[0]),idx:-1};
+    }
+    first=false;out.push(hit);
+  }
+  return out;
+}
+
+/* ---------- pathfinding ---------- */
+function nbrs(i){const r=i/G.cols|0,c=i%G.cols,o=[];if(r>0)o.push(i-G.cols);if(r<G.rows-1)o.push(i+G.cols);if(c>0)o.push(i-1);if(c<G.cols-1)o.push(i+1);return o;}
+function access(i){return G.walk[i]?[i]:nbrs(i).filter(j=>G.walk[j]);}
+function bfsDist(src){
+  const N=G.rows*G.cols,d=new Int32Array(N).fill(-1),q=new Int32Array(N);let h=0,t=0;
+  d[src]=0;q[t++]=src;
+  while(h<t){const u=q[h++];for(const v of nbrs(u))if(G.walk[v]&&d[v]<0){d[v]=d[u]+1;q[t++]=v;}}
+  return d;
+}
+function bfsPath(src,targets){
+  const T=new Set(targets);if(T.has(src))return[src];
+  const N=G.rows*G.cols,prev=new Int32Array(N).fill(-2),q=new Int32Array(N);let h=0,t=0;
+  prev[src]=-1;q[t++]=src;
+  while(h<t){const u=q[h++];for(const v of nbrs(u)){if(!G.walk[v]||prev[v]!==-2)continue;prev[v]=u;
+    if(T.has(v)){const p=[v];let x=u;while(x!==-1){p.push(x);x=prev[x];}return p.reverse();}q[t++]=v;}}
+  return null;
+}
+function computeRoute(items){
+  const segs=[],warn=[];let cur=G.start;
+  if(cur<0){const f=items.find(it=>it.idx>=0&&access(it.idx).length);cur=f?access(f.idx)[0]:-1;}
+  if(cur<0)return{segs:items.map((it,k)=>({n:k+1,raw:it.raw,idx:it.idx,kind:'pick',status:it.idx<0?'missing':'unreach',a:0,b:0,cells:0})),pts:[],stops:[],cells:0,heat:null,ok:0};
+  const pts=[cur];
+  items.forEach((it,k)=>{
+    const s={n:k+1,raw:it.raw,idx:it.idx,kind:'pick',a:pts.length-1,cells:0};
+    if(it.idx<0)s.status='missing';
+    else{const acc=access(it.idx),p=acc.length?bfsPath(cur,acc):null;
+      if(!p)s.status='unreach';else{for(let j=1;j<p.length;j++)pts.push(p[j]);s.cells=p.length-1;cur=p[p.length-1];s.status='ok';}}
+    s.b=pts.length-1;segs.push(s);
+  });
+  if(opts.ret){
+    const dest=G.end>=0?G.end:G.start;
+    if(dest>=0){const s={n:null,raw:G.end>=0?'Arrivo (F)':'Ritorno a partenza',idx:dest,kind:'ret',a:pts.length-1,cells:0};
+      const p=bfsPath(cur,[dest]);if(p){for(let j=1;j<p.length;j++)pts.push(p[j]);s.cells=p.length-1;s.status='ok';}else s.status='unreach';
+      s.b=pts.length-1;segs.push(s);}
+  }
+  const heat=new Uint16Array(G.rows*G.cols);pts.forEach(i=>heat[i]++);
+  const stops=segs.filter(s=>s.status==='ok').map(s=>s.b);
+  return{segs,pts,stops,cells:pts.length-1,heat,ok:segs.filter(s=>s.kind==='pick'&&s.status==='ok').length};
+}
+function nearestOrder(items){
+  const good=[],bad=[];
+  items.forEach(it=>(it.idx>=0&&access(it.idx).length?good:bad).push(it));
+  let cur=G.start>=0?G.start:(good[0]?access(good[0].idx)[0]:-1);
+  if(cur<0)return items.slice();
+  const out=[];let rem=good.slice();
+  while(rem.length){
+    const d=bfsDist(cur);let best=-1,bd=Infinity,bc=-1;
+    rem.forEach((it,k)=>{for(const a of access(it.idx))if(d[a]>=0&&d[a]<bd){bd=d[a];best=k;bc=a;}});
+    if(best<0){out.push(...rem);break;}
+    out.push(rem[best]);cur=bc;rem.splice(best,1);
+  }
+  return out.concat(bad);
+}
+
+/* ---------- state ---------- */
+let G=null,RG=null,RN=null,R=null,mode='given',origin={r:0,c:0};
+let opts={mpc:1,kmh:3.6,ret:true,future:true,heat:false,speed:8};
+let t=0,playing=false,dwell=0,lastTs=0,CS=20,TK={};
+const cv=$('#cv'),ctx=cv.getContext('2d'),wrap=$('#wrap');
+
+function save(){try{localStorage.setItem(LS,JSON.stringify({map:$('#mapTA').value,seq:$('#seqTA').value,opts,origin,mode}));}catch(e){}}
+function load(){try{const s=JSON.parse(localStorage.getItem(LS)||'null');if(s&&s.map){return s;}}catch(e){}return null;}
+
+const meters=c=>c*opts.mpc;
+function fmtM(c){const v=meters(c);return(v<10&&v%1?v.toFixed(1).replace('.',','):Math.round(v).toLocaleString('it-IT'))+' m';}
+function fmtT(c){const s=Math.round(meters(c)/(opts.kmh/3.6));const m=Math.floor(s/60);return m?`${m} min ${String(s%60).padStart(2,'0')} s`:`${s} s`;}
+const esc=s=>String(s).replace(/[&<>"]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
+
+function applyMap(){
+  G=buildGrid(parseTSV($('#mapTA').value));
+  const m=$('#mapMsg');
+  if(!G){m.innerHTML='<div class="msg">La mappa è vuota. Incolla le celle da Excel o carica un file.</div>';RG=RN=R=null;renderAll();return;}
+  const n=G.loc.size;
+  m.innerHTML=`<div class="msg ${G.start<0?'':'ok'}">${G.rows} righe × ${G.cols} colonne · ${n} ubicazioni${G.start<0?' · <b>Manca la partenza</b>: scrivi S in una cella di corsia. Per ora l\'operatore parte dal primo prelievo.':''}</div>`;
+  recompute();
+}
+function recompute(){
+  if(!G){renderAll();return;}
+  const items=parseSeq($('#seqTA').value);
+  RG=computeRoute(items);
+  RN=computeRoute(nearestOrder(items));
+  R=mode==='given'?RG:RN;
+  t=0;stop();
+  const miss=items.filter(i=>i.idx<0),unr=RG.segs.filter(s=>s.status==='unreach'&&s.kind==='pick');
+  let h='';
+  if(!items.length)h='<div class="msg">Nessuna ubicazione nella sequenza.</div>';
+  else{
+    h+=`<div class="msg ok">${items.length} righe lette · ${RG.ok} ubicazioni trovate in mappa.</div>`;
+    if(miss.length)h+=`<div class="msg">Non trovate in mappa: ${miss.slice(0,12).map(i=>'<b>'+esc(i.raw)+'</b>').join(', ')}${miss.length>12?' e altre '+(miss.length-12):''}.</div>`;
+    if(unr.length)h+=`<div class="msg">Non raggiungibili dalla corsia: ${unr.map(s=>'<b>'+esc(s.raw)+'</b>').join(', ')}. Controlla che accanto ci sia una cella vuota collegata.</div>`;
+  }
+  $('#seqMsg').innerHTML=h;
+  renderAll();save();
+}
+
+/* ---------- rendering ---------- */
+function readTokens(){const cs=getComputedStyle(document.documentElement);['paper','panel','line','ink','muted','floor','grid','wall','rack','rack-edge','rack-ink','accent','done','bad','heat'].forEach(k=>TK[k]=cs.getPropertyValue('--'+k).trim());}
+function layout(){
+  if(!G){cv.width=cv.height=0;cv.style.width=cv.style.height='0';return;}
+  const avail=Math.max(200,wrap.clientWidth);
+  let cs=Math.floor(avail/G.cols);
+  const maxH=Math.max(320,window.innerHeight*0.72);
+  cs=Math.min(cs,Math.floor(maxH/G.rows),44);cs=Math.max(cs,9);CS=cs;
+  const dpr=window.devicePixelRatio||1,W=G.cols*cs,H=G.rows*cs;
+  cv.style.width=W+'px';cv.style.height=H+'px';cv.width=Math.round(W*dpr);cv.height=Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+function ctr(i){return[(i%G.cols+0.5)*CS,((i/G.cols|0)+0.5)*CS];}
+function pointAt(tt){const p=R.pts,i=Math.min(Math.floor(tt),p.length-1),j=Math.min(i+1,p.length-1),f=tt-i;const a=ctr(p[i]),b=ctr(p[j]);return[a[0]+(b[0]-a[0])*f,a[1]+(b[1]-a[1])*f];}
+function curSeg(){if(!R)return null;return R.segs.find(s=>s.status==='ok'&&t<s.b-1e-6)||null;}
+function roundRect(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
+
+function draw(){
+  const W=cv.width,H=cv.height;ctx.save();ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,W,H);ctx.restore();
+  if(!G)return;
+  const cs=CS,w=G.cols*cs,h=G.rows*cs,N=G.rows*G.cols;
+  ctx.fillStyle=TK.floor;ctx.fillRect(0,0,w,h);
+  ctx.strokeStyle=TK.grid;ctx.lineWidth=1;ctx.beginPath();
+  for(let c=1;c<G.cols;c++){ctx.moveTo(c*cs+.5,0);ctx.lineTo(c*cs+.5,h);}
+  for(let r=1;r<G.rows;r++){ctx.moveTo(0,r*cs+.5);ctx.lineTo(w,r*cs+.5);}
+  ctx.stroke();
+  if(opts.heat&&R&&R.heat){let mx=0;for(let i=0;i<N;i++)if(G.walk[i]&&R.heat[i]>mx)mx=R.heat[i];
+    if(mx>0){ctx.fillStyle=TK.heat;for(let i=0;i<N;i++){const v=R.heat[i];if(!v||!G.walk[i])continue;ctx.globalAlpha=0.12+0.62*(v/mx);ctx.fillRect((i%G.cols)*cs,(i/G.cols|0)*cs,cs,cs);}ctx.globalAlpha=1;}}
+  for(let i=0;i<N;i++){
+    const ty=G.type[i];if(!ty)continue;const x=(i%G.cols)*cs,y=(i/G.cols|0)*cs;
+    if(ty===1){ctx.fillStyle=TK.wall;ctx.fillRect(x,y,cs,cs);}
+    else if(ty===2){ctx.fillStyle=TK.rack;ctx.fillRect(x,y,cs,cs);ctx.strokeStyle=TK['rack-edge'];ctx.lineWidth=1;ctx.strokeRect(x+.5,y+.5,cs-1,cs-1);
+      if(cs>=24){let fs=Math.min(11,cs*0.32);const txt=G.label[i];ctx.font=`500 ${fs}px ${'"IBM Plex Mono",monospace'}`;let tw=ctx.measureText(txt).width;
+        while(tw>cs-4&&fs>7){fs-=0.5;ctx.font=`500 ${fs}px "IBM Plex Mono",monospace`;tw=ctx.measureText(txt).width;}
+        if(tw<=cs-3){ctx.fillStyle=TK['rack-ink'];ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(txt,x+cs/2,y+cs/2+0.5);}}}
+    else if(ty===3||ty===4){const p=cs*0.12;ctx.fillStyle=TK.ink;roundRect(x+p,y+p,cs-2*p,cs-2*p,3);ctx.fill();
+      if(cs>=12){ctx.fillStyle=TK.paper;ctx.font=`700 ${cs*0.55}px "Barlow Condensed",sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(ty===3?'S':'F',x+cs/2,y+cs/2+1);}}
+  }
+  if(!R||R.pts.length<1)return;
+  const lw=Math.max(2,cs*0.16),cur=curSeg();
+  ctx.lineJoin='round';ctx.lineCap='round';
+  if(opts.future&&t<R.pts.length-1){
+    ctx.setLineDash([Math.max(3,cs*0.25),Math.max(4,cs*0.3)]);ctx.strokeStyle=TK.muted;ctx.globalAlpha=0.75;ctx.lineWidth=Math.max(1.5,lw*0.6);
+    ctx.beginPath();const p0=pointAt(t);ctx.moveTo(p0[0],p0[1]);for(let k=Math.floor(t)+1;k<R.pts.length;k++){const c=ctr(R.pts[k]);ctx.lineTo(c[0],c[1]);}ctx.stroke();
+    ctx.setLineDash([]);ctx.globalAlpha=1;}
+  if(t>0){ctx.strokeStyle=TK.accent;ctx.lineWidth=lw;ctx.beginPath();const c0=ctr(R.pts[0]);ctx.moveTo(c0[0],c0[1]);
+    for(let k=1;k<=Math.floor(t);k++){const c=ctr(R.pts[k]);ctx.lineTo(c[0],c[1]);}const pe=pointAt(t);ctx.lineTo(pe[0],pe[1]);ctx.stroke();}
+  // badges
+  const visits=new Map();
+  R.segs.forEach(s=>{if(s.kind!=='pick'||s.idx<0)return;if(!visits.has(s.idx))visits.set(s.idx,[]);visits.get(s.idx).push(s);});
+  visits.forEach((list,idx)=>{
+    const [x,y]=ctr(idx),r=cs<14?cs*0.42:Math.max(7,cs*0.38);
+    const unreach=list.every(s=>s.status!=='ok'),allDone=list.every(s=>s.status==='ok'&&t>=s.b-1e-6),isCur=cur&&list.includes(cur);
+    ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);
+    if(unreach){ctx.fillStyle=TK.bad;ctx.fill();}
+    else if(isCur){ctx.fillStyle=TK.accent;ctx.fill();ctx.lineWidth=2;ctx.strokeStyle=TK.panel;ctx.stroke();ctx.beginPath();ctx.arc(x,y,r+3,0,Math.PI*2);ctx.strokeStyle=TK.accent;ctx.stroke();}
+    else if(allDone){ctx.fillStyle=TK.done;ctx.fill();}
+    else{ctx.fillStyle=TK.panel;ctx.fill();ctx.lineWidth=2;ctx.strokeStyle=TK.accent;ctx.stroke();}
+    if(cs>=14){const label=String(list[0].n)+(list.length>1?'+':'');ctx.fillStyle=(unreach||isCur||allDone)?'#fff':TK.ink;
+      ctx.font=`600 ${Math.min(r*1.2,16)}px "Barlow Condensed",sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(label,x,y+1);}
+  });
+  // operator
+  const [ox,oy]=pointAt(t),orr=Math.max(5,cs*0.3);
+  ctx.beginPath();ctx.arc(ox,oy,orr+2,0,Math.PI*2);ctx.fillStyle=TK.panel;ctx.fill();
+  ctx.beginPath();ctx.arc(ox,oy,orr,0,Math.PI*2);ctx.fillStyle=TK.ink;ctx.fill();
+  ctx.beginPath();ctx.arc(ox,oy,orr*0.42,0,Math.PI*2);ctx.fillStyle=TK.accent;ctx.fill();
+}
+
+function renderStats(){
+  const sp=$('#sPicks'),sd=$('#sDist'),st=$('#sTime'),sa=$('#sAvg'),sc=$('#sCmp');
+  if(!R){[sp,sd,st,sa,sc].forEach(e=>e.textContent='–');return;}
+  const tot=R.segs.filter(s=>s.kind==='pick').length;
+  sp.innerHTML=`${R.ok}<small>/ ${tot}</small>`;
+  sd.textContent=fmtM(R.cells);st.textContent=fmtT(R.cells);
+  sa.textContent=R.ok?fmtM(R.cells/R.ok):'–';
+  const other=mode==='given'?RN:RG;
+  $('#sCmpLabel').textContent=mode==='given'?'Con ordine più vicino':'Con sequenza data';
+  if(other&&RG.cells>0){const diff=(RN.cells-RG.cells)/RG.cells*100;
+    const shown=mode==='given'?diff:-diff/(1+diff/100);
+    const cls=RN.cells<RG.cells?(mode==='given'?'delta-good':'delta-bad'):'';
+    sc.innerHTML=`${fmtM(other.cells)}<small class="${cls}">${shown>0?'+':''}${Math.round(shown)}%</small>`;}
+  else sc.textContent='–';
+}
+function renderList(){
+  const ol=$('#steps');
+  if(!R||!R.segs.length){ol.innerHTML='<li class="empty">Incolla le ubicazioni nella scheda Sequenza per vedere i passi.</li>';$('#tabStepsBtn').textContent='Passi';return;}
+  let cum=0;
+  ol.innerHTML=R.segs.map((s,k)=>{
+    cum+=s.cells;const ok=s.status==='ok';
+    const sub=s.status==='missing'?'Non trovata in mappa':s.status==='unreach'?'Non raggiungibile':(s.kind==='ret'?'Fine giro':(s.cells===0?'Stessa posizione del prelievo precedente':'Cella '+cellRef(s.idx)));
+    return `<li class="step ${ok?'':'bad'} ${s.kind==='ret'?'ret':''}" data-k="${k}"><span class="num">${s.kind==='ret'?'↩':s.n}</span><span class="code">${esc(s.raw)}</span><span class="dist">${ok?'+'+fmtM(s.cells):'–'}</span><span class="sub">${sub}</span><span class="cum">${ok?fmtM(cum):''}</span></li>`;
+  }).join('');
+  $('#tabStepsBtn').textContent=`Passi (${R.segs.filter(s=>s.kind==='pick').length})`;
+}
+let lastKey='';
+function renderProgress(force){
+  const sc=$('#scrub'),st=$('#status');
+  if(!R||!R.stops.length){sc.max=0;sc.value=0;st.textContent=G?'Nessun percorso da mostrare':'Carica una mappa';return;}
+  const done=R.stops.filter(b=>t>=b-1e-6).length;sc.max=R.stops.length;sc.value=done;
+  const cur=curSeg(),last=[...R.segs].reverse().find(s=>s.status==='ok'&&t>=s.b-1e-6);
+  let txt;
+  if(t<=0)txt=`Pronto alla partenza · prossimo: <b>${esc(cur?cur.raw:'')}</b>`;
+  else if(!cur)txt=`Giro completato · <b>${fmtM(R.cells)}</b> in ${fmtT(R.cells)}`;
+  else if(dwell>0&&last)txt=`${last.kind==='ret'?'Arrivato':'Prelievo '+last.n}: <b>${esc(last.raw)}</b> · ${fmtM(t)} percorsi`;
+  else txt=`${cur.kind==='ret'?'Rientro':'Verso prelievo '+cur.n}: <b>${esc(cur.raw)}</b> · ${fmtM(t)} percorsi`;
+  st.innerHTML=txt;
+  const key=done+'|'+(cur?R.segs.indexOf(cur):-1);
+  if(key===lastKey&&!force)return;lastKey=key;
+  const lis=$('#steps').children;
+  R.segs.forEach((s,k)=>{const li=lis[k];if(!li||s.status!=='ok')return;
+    li.classList.toggle('done',t>=s.b-1e-6);li.classList.toggle('current',s===cur);});
+  if(playing&&cur){const li=lis[R.segs.indexOf(cur)];if(li)li.scrollIntoView({block:'nearest'});}
+}
+function renderAll(){
+  $('#sampleNote').hidden=!($('#mapTA').value===SAMPLE_MAP&&$('#seqTA').value===SAMPLE_SEQ);
+  layout();renderStats();renderList();lastKey='';renderProgress(true);draw();
+}
+function cellRef(i){if(!G||i<0)return'';const r=i/G.cols|0,c=i%G.cols;return colName(c+G.trimC+origin.c)+(r+G.trimR+origin.r+1);}
+
+/* ---------- playback ---------- */
+const PLAY='<path d="M7 4v16l13-8z"/>',PAUSE='<path d="M6 4h4v16H6zM14 4h4v16h-4z"/>';
+function setPlayIcon(){$('#playIcon').innerHTML=playing?PAUSE:PLAY;$('#bPlay').setAttribute('aria-label',playing?'Pausa':'Avvia');}
+function stop(){playing=false;dwell=0;setPlayIcon();}
+function play(){if(!R||R.pts.length<2)return;if(t>=R.pts.length-1-1e-6)t=0;playing=true;dwell=0;lastTs=performance.now();setPlayIcon();requestAnimationFrame(tick);}
+function tick(ts){
+  if(!playing)return;const dt=Math.min(0.1,(ts-lastTs)/1000);lastTs=ts;
+  if(dwell>0){dwell-=dt;}
+  else{const end=R.pts.length-1,nb=R.stops.find(b=>b>t+1e-6);const nt=t+opts.speed*dt;
+    if(nb!==undefined&&nt>=nb){t=nb;dwell=Math.max(0.15,2.4/opts.speed);}else t=Math.min(nt,end);
+    if(t>=end-1e-6&&dwell<=0){t=end;stop();}}
+  if(t>=R.pts.length-1-1e-6&&dwell<=0)stop();
+  renderProgress();draw();
+  if(playing)requestAnimationFrame(tick);
+}
+function jump(nt){stop();t=Math.max(0,Math.min(nt,R?R.pts.length-1:0));renderProgress();draw();}
+$('#bPlay').onclick=()=>playing?stop():play();
+$('#bStart').onclick=()=>jump(0);
+$('#bEnd').onclick=()=>R&&jump(R.pts.length-1);
+$('#bNext').onclick=()=>{if(!R)return;const n=R.stops.find(b=>b>t+1e-6);jump(n===undefined?R.pts.length-1:n);};
+$('#bPrev').onclick=()=>{if(!R)return;const p=R.stops.filter(b=>b<t-1e-6);jump(p.length?p[p.length-1]:0);};
+$('#scrub').oninput=e=>{if(!R)return;const v=+e.target.value;jump(v?R.stops[v-1]:0);};
+$('#speed').oninput=e=>{opts.speed=+e.target.value;save();};
+$('#steps').onclick=e=>{const li=e.target.closest('.step');if(!li||!R)return;const s=R.segs[+li.dataset.k];if(s&&s.status==='ok')jump(s.b);};
+document.addEventListener('keydown',e=>{if(/INPUT|TEXTAREA|SELECT/.test(e.target.tagName))return;
+  if(e.key===' '){e.preventDefault();$('#bPlay').click();}else if(e.key==='ArrowRight')$('#bNext').click();else if(e.key==='ArrowLeft')$('#bPrev').click();});
+
+/* ---------- hover ---------- */
+function hoverAt(clientX,clientY){
+  if(!G)return;const rc=cv.getBoundingClientRect(),c=Math.floor((clientX-rc.left)/CS),r=Math.floor((clientY-rc.top)/CS);
+  if(c<0||r<0||c>=G.cols||r>=G.rows)return;const i=r*G.cols+c,ty=G.type[i];
+  let d=ty===1?'muro / ostacolo':ty===2?'ubicazione '+G.label[i]:ty===3?'partenza':ty===4?'arrivo':'corsia';
+  if(R&&R.heat&&R.heat[i]&&G.walk[i])d+=` · passaggi: ${R.heat[i]}`;
+  if(R&&ty===2){const v=R.segs.filter(s=>s.idx===i&&s.kind==='pick').map(s=>s.n);if(v.length)d+=` · prelievo n. ${v.join(', ')}`;}
+  $('#hover').textContent=`Cella ${cellRef(i)} · ${d}`;
+}
+cv.addEventListener('mousemove',e=>hoverAt(e.clientX,e.clientY));
+cv.addEventListener('click',e=>hoverAt(e.clientX,e.clientY));
+
+/* ---------- tabs & inputs ---------- */
+document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.tabs button').forEach(x=>x.setAttribute('aria-selected',x===b?'true':'false'));
+  ['steps','seq','map','opt'].forEach(k=>$('#tab-'+k).hidden=k!==b.dataset.tab);
+});
+function setMode(m){mode=m;$('#modeGiven').setAttribute('aria-pressed',m==='given');$('#modeNN').setAttribute('aria-pressed',m==='nn');R=m==='given'?RG:RN;t=0;stop();renderAll();save();}
+$('#modeGiven').onclick=()=>setMode('given');$('#modeNN').onclick=()=>setMode('nn');
+let deb;const debounce=fn=>{clearTimeout(deb);deb=setTimeout(fn,350);};
+$('#seqTA').addEventListener('input',()=>debounce(recompute));
+$('#mapTA').addEventListener('input',()=>{origin={r:0,c:0};debounce(applyMap);});
+$('#bSample').onclick=()=>{$('#mapTA').value=SAMPLE_MAP;$('#seqTA').value=SAMPLE_SEQ;origin={r:0,c:0};$('#sheetRow').hidden=true;applyMap();};
+$('#bCopy').onclick=async()=>{const ta=$('#mapTA'),b=$('#bCopy');
+  try{await navigator.clipboard.writeText(ta.value);b.textContent='Copiata: incollala in A1';}
+  catch(e){ta.focus();ta.select();b.textContent='Testo selezionato: premi Ctrl+C';}
+  setTimeout(()=>b.textContent='Copia mappa per Excel',2600);};
+function bindOpt(id,key,num){const el=$('#'+id);el.addEventListener(num?'input':'change',()=>{
+  if(num){const v=parseFloat(String(el.value).replace(',','.'));if(!(v>0))return;opts[key]=v;}else opts[key]=el.checked;
+  if(key==='ret')recompute();else{renderAll();save();}});}
+bindOpt('oMpc','mpc',1);bindOpt('oKmh','kmh',1);bindOpt('oRet','ret');bindOpt('oFuture','future');bindOpt('oHeat','heat');
+
+/* ---------- Excel ---------- */
+let WB=null;
+function sheetRows(name){const ws=WB.Sheets[name];if(!ws)return{rows:[],o:{r:0,c:0}};
+  const rg=XLSX.utils.decode_range(ws['!ref']||'A1');
+  return{rows:XLSX.utils.sheet_to_json(ws,{header:1,defval:'',blankrows:true,raw:false}),o:{r:rg.s.r,c:rg.s.c}};}
+function useSheets(){
+  const m=$('#sheetMap').value,s=$('#sheetSeq').value;
+  const sr=sheetRows(m);$('#mapTA').value=rowsToTSV(sr.rows);
+  const g=buildGrid(sr.rows);origin=sr.o;
+  if(s){$('#seqTA').value=rowsToTSV(sheetRows(s).rows);}
+  applyMap();
+}
+$('#fileIn').addEventListener('change',e=>{
+  const f=e.target.files[0];if(!f)return;
+  if(typeof XLSX==='undefined'){$('#mapMsg').innerHTML='<div class="msg">Il lettore Excel non si è caricato. Copia le celle da Excel e incollale nel riquadro qui sotto.</div>';return;}
+  const rd=new FileReader();
+  rd.onload=()=>{try{
+      WB=XLSX.read(new Uint8Array(rd.result),{type:'array'});
+      const names=WB.SheetNames;
+      const pm=names.find(n=>/mappa|layout|map|pianta/i.test(n))||names[0];
+      const ps=names.find(n=>/sequen|preliev|picking|ordin|giro/i.test(n))||'';
+      $('#sheetMap').innerHTML=names.map(n=>`<option ${n===pm?'selected':''}>${esc(n)}</option>`).join('');
+      $('#sheetSeq').innerHTML='<option value="">Nessuno</option>'+names.map(n=>`<option ${n===ps?'selected':''}>${esc(n)}</option>`).join('');
+      $('#sheetRow').hidden=names.length<2;
+      useSheets();
+    }catch(err){$('#mapMsg').innerHTML='<div class="msg">Non riesco a leggere questo file. Salvalo come .xlsx o copia e incolla le celle.</div>';}};
+  rd.readAsArrayBuffer(f);
+});
+$('#sheetMap').onchange=useSheets;$('#sheetSeq').onchange=useSheets;
+
+/* ---------- boot ---------- */
+const saved=load();
+if(saved){$('#mapTA').value=saved.map;$('#seqTA').value=saved.seq||'';Object.assign(opts,saved.opts||{});origin=saved.origin||origin;mode=saved.mode==='nn'?'nn':'given';}
+else{$('#mapTA').value=SAMPLE_MAP;$('#seqTA').value=SAMPLE_SEQ;}
+$('#oMpc').value=opts.mpc;$('#oKmh').value=opts.kmh;$('#oRet').checked=opts.ret;$('#oFuture').checked=opts.future;$('#oHeat').checked=opts.heat;$('#speed').value=opts.speed;
+$('#modeGiven').setAttribute('aria-pressed',mode==='given');$('#modeNN').setAttribute('aria-pressed',mode==='nn');
+readTokens();applyMap();
+if(document.fonts&&document.fonts.ready)document.fonts.ready.then(()=>draw());
+new ResizeObserver(()=>{layout();draw();}).observe(wrap);
+const mq=window.matchMedia('(prefers-color-scheme: dark)');const retheme=()=>{readTokens();draw();};
+mq.addEventListener?mq.addEventListener('change',retheme):mq.addListener(retheme);
+new MutationObserver(retheme).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+</script>
+</body>
+</html>
