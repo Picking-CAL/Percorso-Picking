@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <style>
 /* Layout: barra filtri in alto, pianta del magazzino a sinistra, pannello operativo a destra; su telefono si impila. */
 :root{
@@ -279,6 +280,7 @@ ol.steps{list-style:none;margin:0;padding:0;max-height:560px;overflow:auto}
           <tr><td>X  #  MURO</td><td>Muro, colonna, ostacolo</td></tr>
           <tr><td>S  PARTENZA</td><td>Punto di partenza dell'operatore</td></tr>
           <tr><td>F  FINE</td><td>Punto di arrivo, facoltativo</td></tr>
+          <tr><td>bordo spesso</td><td>Separatore: non si attraversa, né camminando né per prelevare. Usa in Excel un bordo medio o spesso. Viene letto solo caricando il file .xlsx, non con il copia e incolla.</td></tr>
           <tr><td>A-07</td><td>Qualsiasi altro testo è un'ubicazione. Più codici nella stessa cella vanno separati da virgola.</td></tr>
         </table>
         <p class="help">I colori delle celle Excel non vengono letti: usa i codici della tabella. Un codice prelievo più dettagliato, come A-07-03-B, viene associato alla cella A-07. Il prelievo avviene dalla cella di corsia più vicina all'ubicazione, anche se è all'interno di un blocco di scaffali: gli scaffali non bloccano il prelievo, i muri X sì.</p>
@@ -344,7 +346,7 @@ function parseTSV(text){
   return lines.map(l=>l.split('\t'));
 }
 function colName(n){let s='';n++;while(n>0){const m=(n-1)%26;s=String.fromCharCode(65+m)+s;n=(n-m-1)/26|0;}return s;}
-function buildGrid(rows){
+function buildGrid(rows,borders){
   const filled=v=>String(v==null?'':v).trim()!=='';
   let r0=-1,r1=-1,c0=Infinity,c1=-1;
   rows.forEach((row,r)=>row.forEach((v,c)=>{if(filled(v)){if(r0<0)r0=r;r1=r;c0=Math.min(c0,c);c1=Math.max(c1,c);}}));
@@ -366,7 +368,43 @@ function buildGrid(rows){
     }
   }
   g.keys.sort((a,b)=>b.length-a.length);
+  // separatori (bordi spessi): bit 1=sopra 2=destra 4=sotto 8=sinistra, impostati su entrambe le celle
+  g.bar=new Uint8Array(N);g.nSep=0;
+  (borders||[]).forEach(([br,bc,m])=>{
+    const r=br-r0,c=bc-c0;if(r<0||c<0||r>=rowsN||c>=cols)return;const i=r*cols+c;
+    if(m&1&&r>0){g.bar[i]|=1;g.bar[i-cols]|=4;}
+    if(m&4&&r<rowsN-1){g.bar[i]|=4;g.bar[i+cols]|=1;}
+    if(m&8&&c>0){g.bar[i]|=8;g.bar[i-1]|=2;}
+    if(m&2&&c<cols-1){g.bar[i]|=2;g.bar[i+1]|=8;}
+  });
+  for(let i=0;i<N;i++){if(g.bar[i]&4)g.nSep++;if(g.bar[i]&2)g.nSep++;}
   return g;
+}
+
+/* ---------- bordi spessi dal file .xlsx ---------- */
+const THICK=new Set(['medium','thick','double','mediumDashed','mediumDashDot','mediumDashDotDot','slantDashDot']);
+function refToRC(ref){const m=/^([A-Z]+)(\d+)$/.exec(ref);if(!m)return null;let c=0;for(const ch of m[1])c=c*26+ch.charCodeAt(0)-64;return[+m[2]-1,c-1];}
+async function readBorders(buf,sheetName){
+  if(typeof JSZip==='undefined')return null;
+  const zip=await JSZip.loadAsync(buf);
+  const txt=async n=>{const f=zip.file(n);return f?await f.async('string'):null;};
+  const xml=s=>new DOMParser().parseFromString(s,'application/xml');
+  const wb=xml(await txt('xl/workbook.xml')),rels=xml(await txt('xl/_rels/workbook.xml.rels'));
+  const sh=[...wb.getElementsByTagName('sheet')].find(x=>x.getAttribute('name')===sheetName);if(!sh)return null;
+  const rid=sh.getAttribute('r:id')||sh.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships','id');
+  const rel=[...rels.getElementsByTagName('Relationship')].find(x=>x.getAttribute('Id')===rid);if(!rel)return null;
+  let target=rel.getAttribute('Target');target=target.startsWith('/')?target.slice(1):'xl/'+target;
+  const st=xml(await txt('xl/styles.xml')||'<x/>');
+  const bordersEl=st.getElementsByTagName('borders')[0],xfsEl=st.getElementsByTagName('cellXfs')[0];
+  if(!bordersEl||!xfsEl)return[];
+  const side=(b,names)=>{for(const n of names){const e=[...b.children].find(x=>x.localName===n);if(e&&THICK.has(e.getAttribute('style')))return true;}return false;};
+  const bmask=[...bordersEl.children].filter(x=>x.localName==='border').map(b=>(side(b,['top'])?1:0)|(side(b,['right','end'])?2:0)|(side(b,['bottom'])?4:0)|(side(b,['left','start'])?8:0));
+  const xfMask=[...xfsEl.children].filter(x=>x.localName==='xf').map(x=>bmask[+(x.getAttribute('borderId')||0)]||0);
+  const sheet=await txt(target);if(!sheet)return[];
+  const out=[],re=/<c\s([^>]*?)\/?>/g;let m;
+  while((m=re.exec(sheet))){const a=m[1],r=/\br="([A-Z]+\d+)"/.exec(a),sid=/\bs="(\d+)"/.exec(a);if(!r||!sid)continue;
+    const mk=xfMask[+sid[1]];if(!mk)continue;const rc=refToRC(r[1]);if(rc)out.push([rc[0],rc[1],mk]);}
+  return out;
 }
 const matchCache=new Map();
 function matchCode(q){
@@ -416,7 +454,7 @@ const fmtClock=s=>s==null?'':`${String(Math.floor(s/3600)).padStart(2,'0')}:${St
 function fmtDur(s){const h=Math.floor(s/3600),m=Math.round((s%3600)/60);return h?`${h} h ${String(m).padStart(2,'0')} min`:`${m} min`;}
 
 /* ---------- pathfinding ---------- */
-function nbrs(i){const r=i/G.cols|0,c=i%G.cols,o=[];if(r>0)o.push(i-G.cols);if(r<G.rows-1)o.push(i+G.cols);if(c>0)o.push(i-1);if(c<G.cols-1)o.push(i+1);return o;}
+function nbrs(i){const r=i/G.cols|0,c=i%G.cols,b=G.bar[i],o=[];if(r>0&&!(b&1))o.push(i-G.cols);if(r<G.rows-1&&!(b&4))o.push(i+G.cols);if(c>0&&!(b&8))o.push(i-1);if(c<G.cols-1&&!(b&2))o.push(i+1);return o;}
 const accessCache=new Map();
 /* Punto di prelievo: la cella di corsia più vicina all'ubicazione.
    Si cerca attraverso le altre ubicazioni (lo scaffale non è un ostacolo per il carrello che preleva dalla corsia),
@@ -501,14 +539,14 @@ function nearestByDay(items){
 }
 
 /* ---------- stato ---------- */
-let G=null,RG=null,RN=null,R=null,mode='given',origin={r:0,c:0};
+let mapBorders=[],G=null,RG=null,RN=null,R=null,mode='given',origin={r:0,c:0};
 let opts={mpc:1,kmh:3.6,ret:true,future:true,heat:false,speed:8};
 let P=null,PC={loc:-1,day:-1,time:-1,filters:[],dsel:''},pSource='sample',savedPC=null,curItems=[],itemsInfo={};
 let t=0,playing=false,dwell=0,lastTs=0,CS=20,TK={};
 const cv=$('#cv'),ctx=cv.getContext('2d'),wrap=$('#wrap');
 
 function pcToNames(){if(!P)return savedPC;const h=P.headers;return{loc:h[PC.loc]??null,day:h[PC.day]??null,time:h[PC.time]??null,filters:PC.filters.map(f=>({name:h[f.col],val:f.val})),dsel:PC.dsel};}
-function save(){try{localStorage.setItem(LS,JSON.stringify({map:$('#mapTA').value,seq:$('#seqTA').value,opts,origin,mode,pSource,pc:pcToNames()}));}catch(e){}}
+function save(){try{localStorage.setItem(LS,JSON.stringify({map:$('#mapTA').value,borders:mapBorders,seq:$('#seqTA').value,opts,origin,mode,pSource,pc:pcToNames()}));}catch(e){}}
 function load(){try{const s=JSON.parse(localStorage.getItem(LS)||'null');if(s&&s.map)return s;}catch(e){}return null;}
 
 const esc=s=>String(s).replace(/[&<>"]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
@@ -608,10 +646,10 @@ function itemsFromFile(){
 
 /* ---------- mappa ---------- */
 function applyMap(){
-  G=buildGrid(parseTSV($('#mapTA').value));matchCache.clear();accessCache.clear();
+  G=buildGrid(parseTSV($('#mapTA').value),mapBorders);matchCache.clear();accessCache.clear();
   const m=$('#mapMsg');
   if(!G){m.innerHTML='<div class="msg">La mappa è vuota. Incolla le celle da Excel o carica un file.</div>';RG=RN=R=null;renderAll();return;}
-  m.innerHTML=`<div class="msg ${G.start<0?'':'ok'}">${G.rows} righe × ${G.cols} colonne · ${nf(G.loc.size)} ubicazioni${G.start<0?' · <b>Manca la partenza</b>: scrivi S in una cella di corsia. Per ora l\'operatore parte dal primo prelievo.':''}</div>`;
+  m.innerHTML=`<div class="msg ${G.start<0?'':'ok'}">${G.rows} righe × ${G.cols} colonne · ${nf(G.loc.size)} ubicazioni${G.nSep?' · '+nf(G.nSep)+' tratti di separatore':''}${G.start<0?' · <b>Manca la partenza</b>: scrivi S in una cella di corsia. Per ora l\'operatore parte dal primo prelievo.':''}</div>`;
   recompute();
 }
 function recompute(){
@@ -684,6 +722,10 @@ function draw(){
     else if(ty===3||ty===4){const p=cs*0.12;ctx.fillStyle=TK.ink;roundRect(x+p,y+p,cs-2*p,cs-2*p,3);ctx.fill();
       if(cs>=12){ctx.fillStyle=TK.paper;ctx.font=`700 ${cs*0.55}px "Barlow Condensed",sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(ty===3?'S':'F',x+cs/2,y+cs/2+1);}}
   }
+  if(G.nSep){ctx.strokeStyle=TK.ink;ctx.lineWidth=Math.max(2,cs*0.12);ctx.lineCap='square';ctx.beginPath();
+    for(let i=0;i<N;i++){const b=G.bar[i];if(!b)continue;const x=(i%G.cols)*cs,y=(i/G.cols|0)*cs;
+      if(b&4){ctx.moveTo(x,y+cs);ctx.lineTo(x+cs,y+cs);}if(b&2){ctx.moveTo(x+cs,y);ctx.lineTo(x+cs,y+cs);}}
+    ctx.stroke();ctx.lineCap='butt';}
   if(!R||R.pts.length<1)return;
   const lw=Math.max(2,cs*0.16),cur=curSeg();
   ctx.lineJoin='round';ctx.lineCap='round';
@@ -863,8 +905,8 @@ function setMode(m){if(m==='nn'&&!RN)return;mode=m;setModeButtons();R=m==='given
 $('#modeGiven').onclick=()=>setMode('given');$('#modeNN').onclick=()=>setMode('nn');
 let deb;const debounce=fn=>{clearTimeout(deb);deb=setTimeout(fn,350);};
 $('#seqTA').addEventListener('input',()=>{if(!P)debounce(recompute);else save();});
-$('#mapTA').addEventListener('input',()=>{origin={r:0,c:0};debounce(applyMap);});
-$('#bSample').onclick=()=>{$('#mapTA').value=SAMPLE_MAP;$('#seqTA').value=SAMPLE_SEQ;origin={r:0,c:0};$('#sheetRow').hidden=true;loadSamplePicks();applyMap();};
+$('#mapTA').addEventListener('input',()=>{origin={r:0,c:0};mapBorders=[];debounce(applyMap);});
+$('#bSample').onclick=()=>{mapBorders=[];$('#mapTA').value=SAMPLE_MAP;$('#seqTA').value=SAMPLE_SEQ;origin={r:0,c:0};$('#sheetRow').hidden=true;loadSamplePicks();applyMap();};
 $('#bCopy').onclick=async()=>{const ta=$('#mapTA'),b=$('#bCopy');
   try{await navigator.clipboard.writeText(ta.value);b.textContent='Copiata: incollala in A1';}
   catch(e){ta.focus();ta.select();b.textContent='Testo selezionato: premi Ctrl+C';}
@@ -920,13 +962,20 @@ $('#pSheet').onchange=e=>{savedPC=pcToNames();readPickSheet(e.target.value);};
 function sheetRows(name){const ws=WB.Sheets[name];if(!ws)return{rows:[],o:{r:0,c:0}};
   const rg=XLSX.utils.decode_range(ws['!ref']||'A1');
   return{rows:XLSX.utils.sheet_to_json(ws,{header:1,defval:'',blankrows:true,raw:false}),o:{r:rg.s.r,c:rg.s.c}};}
-function useMapSheet(){const sr=sheetRows($('#sheetMap').value);$('#mapTA').value=rowsToTSV(sr.rows);origin=sr.o;applyMap();}
+let WBbuf=null,WBzip=false;
+async function useMapSheet(){
+  const name=$('#sheetMap').value,sr=sheetRows(name);
+  $('#mapTA').value=rowsToTSV(sr.rows);origin=sr.o;mapBorders=[];
+  if(WBzip&&WBbuf){try{const b=await readBorders(WBbuf,name);if(b)mapBorders=b.map(([r,c,m])=>[r-sr.o.r,c-sr.o.c,m]);}catch(e){}}
+  applyMap();
+}
 $('#fileIn').addEventListener('change',e=>{
   const f=e.target.files[0];if(!f)return;
   if(typeof XLSX==='undefined'){$('#mapMsg').innerHTML='<div class="msg">Il lettore Excel non si è caricato. Copia le celle da Excel e incollale nel riquadro qui sotto.</div>';return;}
   const rd=new FileReader();
   rd.onload=()=>{try{
       WB=XLSX.read(new Uint8Array(rd.result),{type:'array',raw:/\.csv$/i.test(f.name)});
+      WBbuf=rd.result;WBzip=/\.(xlsx|xlsm)$/i.test(f.name);
       const names=WB.SheetNames,pm=names.find(n=>/mappa|layout|map|pianta/i.test(n))||names[0];
       $('#sheetMap').innerHTML=names.map(n=>`<option ${n===pm?'selected':''}>${esc(n)}</option>`).join('');
       $('#sheetRow').hidden=names.length<2;
@@ -939,11 +988,11 @@ $('#sheetMap').onchange=useMapSheet;
 
 /* ---------- avvio ---------- */
 const saved=load();
-if(saved){$('#mapTA').value=saved.map;$('#seqTA').value=saved.seq||'';Object.assign(opts,saved.opts||{});origin=saved.origin||origin;mode=saved.mode==='nn'?'nn':'given';pSource=saved.pSource||'manual';}
+if(saved){$('#mapTA').value=saved.map;$('#seqTA').value=saved.seq||'';Object.assign(opts,saved.opts||{});origin=saved.origin||origin;mapBorders=saved.borders||[];mode=saved.mode==='nn'?'nn':'given';pSource=saved.pSource||'manual';}
 else{$('#mapTA').value=SAMPLE_MAP;$('#seqTA').value=SAMPLE_SEQ;pSource='sample';}
 $('#oRet').checked=opts.ret;$('#oFuture').checked=opts.future;$('#oHeat').checked=opts.heat;$('#speed').value=opts.speed;
 setModeButtons();readTokens();
-G=buildGrid(parseTSV($('#mapTA').value));accessCache.clear();
+G=buildGrid(parseTSV($('#mapTA').value),mapBorders);accessCache.clear();
 if(pSource==='sample'){loadSamplePicks();}
 else{savedPC=saved&&saved.pc||null;$('#manualBox').open=true;
   if(pSource==='file')$('#pInfo').innerHTML='<div class="msg info">Ricarica il file dei prelievi: non resta salvato nel browser. Colonne e filtri scelti l\'ultima volta vengono riapplicati in automatico.</div>';
