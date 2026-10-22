@@ -177,6 +177,7 @@ ol.steps{list-style:none;margin:0;padding:0;max-height:560px;overflow:auto}
   </section>
 
   <dl class="stats" id="stats">
+    <div class="stat"><dt>Prelievi totali</dt><dd id="sRows">–</dd></div>
     <div class="stat"><dt>Ubicazioni visitate</dt><dd id="sPicks">–</dd></div>
     <div class="stat"><dt>Ubicazioni diverse</dt><dd id="sDistinct">–</dd></div>
     <div class="stat"><dt>Tempo considerato</dt><dd id="sReal">–</dd></div>
@@ -715,13 +716,16 @@ function realDuration(items){
 function fmtGap(sec){sec=Math.round(sec);if(sec<60)return sec+' s';const m=Math.floor(sec/60),r=sec%60;return m<60?`${m} min${r?' '+String(r).padStart(2,'0')+' s':''}`:fmtDur(sec);}
 function renderStats(){
   const ids=['sPicks','sDistinct','sReal','sRate','sGap','sCmp'].map(i=>$('#'+i));
-  if(!R){ids.forEach(e=>e.textContent='–');return;}
+  if(!R){ids.forEach(e=>e.textContent='–');$('#sRows').textContent='–';return;}
   const items=curItems,n=items.length,inMap=items.filter(i=>i.idx>=0).length;
-  ids[0].innerHTML=nf(n)+(inMap<n?`<small>${nf(inMap)} in mappa</small>`:'');
+  $('#sRows').innerHTML=nf(n)+(inMap<n?`<small>${nf(inMap)} in mappa</small>`:'');
+  // una visita = una sosta: prelievi consecutivi nella stessa ubicazione, nello stesso giorno, contano una volta
+  const stops=items.filter((it,k)=>k===0||it.code!==items[k-1].code||it.dk!==items[k-1].dk).length;
+  ids[0].innerHTML=nf(stops)+(stops<n?`<small>soste</small>`:'');
   ids[1].textContent=nf(new Set(items.map(i=>i.code)).size);
   const rd=realDuration(items);
   ids[2].textContent=rd==null||rd<=0?'–':fmtDur(rd);
-  ids[3].textContent=rd&&rd>0?(n/(rd/3600)).toLocaleString('it-IT',{maximumFractionDigits:1}):'–';
+  ids[3].textContent=rd&&rd>0?(stops/(rd/3600)).toLocaleString('it-IT',{maximumFractionDigits:1}):'–';
   const days=new Set(items.filter(i=>i.sec!=null).map(i=>i.dk)).size;
   ids[4].textContent=rd&&rd>0&&n-days>0?fmtGap(rd/(n-days)):'–';
   $('#sCmpLabel').textContent=mode==='given'?'Percorso con ordine più vicino':'Percorso con ordine reale';
