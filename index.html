@@ -49,6 +49,10 @@ button,input,select,textarea{font:inherit;color:inherit}
 .fsel{display:flex;flex-direction:column;gap:4px;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600;min-width:0}
 .fsel select{font-size:14.5px;text-transform:none;letter-spacing:0;color:var(--ink);font-weight:500;border:1px solid var(--line);border-radius:6px;background:var(--paper);padding:7px 8px;max-width:260px;min-width:120px}
 .daynav{display:flex;gap:4px;align-items:center}
+.fctl{display:flex;gap:6px;align-items:center;flex-wrap:wrap;text-transform:none;letter-spacing:0;font-size:14px;color:var(--ink);font-weight:500}
+.fctl select.fmode{min-width:0;max-width:150px;color:var(--muted)}
+.fctl input{font-size:14.5px;border:1px solid var(--line);border-radius:6px;background:var(--paper);padding:6px 8px;width:150px;max-width:100%;color:var(--ink)}
+.fbad{color:var(--bad);text-transform:none;letter-spacing:0;font-weight:500}
 .fcount{margin-left:auto;font-size:14px;color:var(--muted);align-self:center;font-variant-numeric:tabular-nums}
 .fcount b{color:var(--ink)}
 .fcount.warn{color:var(--bad)}
@@ -548,7 +552,7 @@ let P=null,PC={loc:-1,day:-1,time:-1,filters:[],dsel:''},pSource='sample',savedP
 let t=0,playing=false,dwell=0,lastTs=0,CS=20,TK={};
 const cv=$('#cv'),ctx=cv.getContext('2d'),wrap=$('#wrap');
 
-function pcToNames(){if(!P)return savedPC;const h=P.headers;return{loc:h[PC.loc]??null,day:h[PC.day]??null,time:h[PC.time]??null,filters:PC.filters.map(f=>({name:h[f.col],val:f.val})),dsel:PC.dsel};}
+function pcToNames(){if(!P)return savedPC;const h=P.headers;return{loc:h[PC.loc]??null,day:h[PC.day]??null,time:h[PC.time]??null,filters:PC.filters.map(f=>({name:h[f.col],val:f.val,mode:f.mode||'eq',min:f.min||'',max:f.max||''})),dsel:PC.dsel};}
 function save(){try{localStorage.setItem(LS,JSON.stringify({map:$('#mapTA').value,borders:mapBorders,seq:$('#seqTA').value,opts,origin,mode,pSource,pc:pcToNames()}));}catch(e){}}
 function load(){try{const s=JSON.parse(localStorage.getItem(LS)||'null');if(s&&s.map)return s;}catch(e){}return null;}
 
@@ -571,13 +575,14 @@ function applySavedOrGuess(){
   let day=byName(sp.day);if(sp.day===undefined||(day<0&&sp.day!==null))day=guessCol(/data|giorno|date|\bday\b/i,[loc]);
   let time=byName(sp.time);if(sp.time===undefined||(time<0&&sp.time!==null))time=guessCol(/\bora\b|orario|time|hour/i,[loc]);
   if(time<0&&day>=0&&/ora|time/i.test(h[day]))time=day;
-  let filters=(sp.filters||[]).map(f=>({col:byName(f.name),val:f.val||''})).filter(f=>f.col>=0);
-  if(!sp.filters){const op=guessCol(/operat|utente|user|addett|picker|matricola/i,[loc,day,time]);if(op>=0)filters=[{col:op,val:'__first__'}];}
+  let filters=(sp.filters||[]).map(f=>({col:byName(f.name),val:f.val||'',mode:f.mode||'eq',min:f.min||'',max:f.max||''})).filter(f=>f.col>=0);
+  if(!sp.filters){const op=guessCol(/operat|utente|user|addett|picker|matricola/i,[loc,day,time]);if(op>=0)filters=[{col:op,val:'__first__',mode:'eq',min:'',max:''}];}
   PC={loc,day,time,filters,dsel:sp.dsel||'__first__'};
   savedPC=null;
   prepRows();buildMappingUI();refreshFilters(true);recompute();
 }
 function prepRows(){
+  P.kindCache={};P.keyCache={};
   const n=P.n;P.dk=new Array(n);P.sec=new Array(n);P.days=new Map();
   for(let r=0;r<n;r++){
     let dk='',sec=null;
@@ -599,9 +604,46 @@ function buildMappingUI(){
   if(PC.day>=0||PC.time>=0){if(PC.day>=0&&dated<P.n*0.9)info+=`<div class="msg">Su ${nf(P.n-dated)} righe non riesco a leggere il giorno. Controlla la colonna scelta: accetto date Excel e testi come 01/10/2026.</div>`;}
   $('#pInfo').innerHTML=info;
 }
+/* ---------- filtri a intervallo (da min / fino a max) ---------- */
+function colKind(col){
+  if(P.kindCache[col])return P.kindCache[col];
+  let k='text';
+  if(col===PC.time)k='time';else if(col===PC.day)k='day';
+  else{let num=0,frac=0,tm=0,dt=0,tot=0;
+    for(let r=0;r<P.n&&tot<300;r++){const raw=P.raw[r][col],tx=P.txt[r][col];if(tx==='')continue;tot++;
+      if(typeof raw==='number'){num++;if(raw>=0&&raw<1)frac++;}
+      else if(/^\d{1,2}:\d{2}(:\d{2})?$/.test(tx))tm++;
+      else if(/^\d{1,4}[\/\-.]\d{1,2}[\/\-.]\d{1,4}/.test(tx))dt++;
+      else if(/^-?\d+([.,]\d+)?$/.test(tx))num++;}
+    if(tot){if((frac+tm)/tot>=0.8)k='time';else if(dt/tot>=0.8)k='day';else if(num/tot>=0.8)k='num';}}
+  return P.kindCache[col]=k;
+}
+function colKeys(col){
+  if(P.keyCache[col])return P.keyCache[col];
+  const kind=colKind(col),out=new Array(P.n);
+  for(let r=0;r<P.n;r++){const raw=P.raw[r][col],tx=P.txt[r][col];
+    if(kind==='time')out[r]=col===PC.time?P.sec[r]:parseDT(raw,tx,true).sec;
+    else if(kind==='day')out[r]=col===PC.day?(P.dk[r]||null):(parseDT(raw,tx,false).dk||null);
+    else if(kind==='num'){const v=typeof raw==='number'?raw:parseFloat(String(tx).replace(/\./g,'').replace(',','.'));out[r]=isFinite(v)?v:null;}
+    else out[r]=tx;}
+  return P.keyCache[col]=out;
+}
+function parseBound(kind,v){
+  v=String(v||'').trim();if(!v)return null;
+  if(kind==='time'){const m=/^(\d{1,2})[:.](\d{2})(?:[:.](\d{2}))?$/.exec(v);return m?(+m[1])*3600+(+m[2])*60+(+(m[3]||0)):null;}
+  if(kind==='day'){if(/^\d{4}-\d{2}-\d{2}$/.test(v))return v;const d=parseDT(v,v,false).dk;return d||null;}
+  if(kind==='num'){const n=parseFloat(v.replace(',','.'));return isFinite(n)?n:null;}
+  return v;
+}
+function prepBounds(){PC.filters.forEach(f=>{if(!f.mode||f.mode==='eq'){f._lo=f._hi=null;return;}const k=colKind(f.col);
+  f._lo=(f.mode==='min'||f.mode==='range')?parseBound(k,f.min):null;f._hi=(f.mode==='max'||f.mode==='range')?parseBound(k,f.max):null;});}
 function rowPass(r,skip){
   if(!P.txt[r][PC.loc])return false;
-  for(let i=0;i<PC.filters.length;i++){if(i===skip)continue;const f=PC.filters[i];if(f.val&&f.val!=='__first__'&&P.txt[r][f.col]!==f.val)return false;}
+  for(let i=0;i<PC.filters.length;i++){if(i===skip)continue;const f=PC.filters[i];
+    if(f.mode&&f.mode!=='eq'){if(f._lo==null&&f._hi==null)continue;const k=colKeys(f.col)[r];if(k==null||k==='')return false;
+      const kind=colKind(f.col),cmp=kind==='text'?(a,b)=>coll.compare(a,b):(a,b)=>a<b?-1:a>b?1:0;
+      if(f._lo!=null&&cmp(k,f._lo)<0)return false;if(f._hi!=null&&cmp(k,f._hi)>0)return false;continue;}
+    if(f.val&&f.val!=='__first__'&&P.txt[r][f.col]!==f.val)return false;}
   if(skip!=='day'&&PC.dsel&&PC.dsel!=='*'&&PC.dsel!=='__first__'&&P.dk[r]!==PC.dsel)return false;
   return true;
 }
@@ -614,13 +656,23 @@ function refreshFilters(initial){
   const hasDay=PC.day>=0||(PC.time>=0&&P.dk.some(Boolean));
   if(hasDay&&PC.dsel==='__first__'){const d=daysFor();PC.dsel=d.length?d[0][0]:'*';}
   if(!hasDay)PC.dsel='';
+  prepBounds();
   $('#fItems').innerHTML=PC.filters.map((f,i)=>{
+    const mode=f.mode||'eq';
+    const modeSel=`<select data-fm="${i}" aria-label="Tipo di filtro" class="fmode">${[['eq','Uguale a'],['min','Da (min)'],['max','Fino a (max)'],['range','Da … a …']].map(([v,l])=>`<option value="${v}" ${v===mode?'selected':''}>${l}</option>`).join('')}</select>`;
+    if(mode!=='eq'){
+      const kind=colKind(f.col),type=kind==='time'?'time':kind==='day'?'date':kind==='num'?'number':'text';
+      const extra=kind==='time'?' step="1"':kind==='num'?' step="any"':'';
+      const inp=(which,lab)=>`<input type="${type}"${extra} data-f${which}="${i}" value="${esc(f[which]||'')}" aria-label="${lab}" placeholder="${lab}">`;
+      const bad=(mode!=='max'&&f.min&&f._lo==null)||(mode!=='min'&&f.max&&f._hi==null);
+      return `<div class="fsel">${esc(P.headers[f.col])}<div class="fctl">${modeSel}${mode!=='max'?inp('min','da'):''}${mode==='range'?'<span>a</span>':''}${mode!=='min'?inp('max','fino a'):''}</div>${bad?'<span class="fbad">Valore non valido</span>':''}</div>`;
+    }
     const vals=valuesFor(i,false),tot=vals.reduce((a,v)=>a+v[1],0);
     const has=vals.some(v=>v[0]===f.val);
     const more=vals.length>500;
     const list=vals.slice(0,500);
     if(f.val&&!has)list.unshift([f.val,0]);
-    return `<label class="fsel">${esc(P.headers[f.col])}<select data-f="${i}"><option value="">Tutti (${nf(tot)})</option>${list.map(v=>`<option value="${esc(v[0])}" ${v[0]===f.val?'selected':''}>${esc(v[0])} (${nf(v[1])})</option>`).join('')}${more?'<option disabled>… altri valori non mostrati</option>':''}</select></label>`;
+    return `<div class="fsel">${esc(P.headers[f.col])}<div class="fctl">${modeSel}<select data-f="${i}" aria-label="${esc(P.headers[f.col])}"><option value="">Tutti (${nf(tot)})</option>${list.map(v=>`<option value="${esc(v[0])}" ${v[0]===f.val?'selected':''}>${esc(v[0])} (${nf(v[1])})</option>`).join('')}${more?'<option disabled>… altri valori non mostrati</option>':''}</select></div></div>`;
   }).join('');
   $('#dayBox').hidden=!hasDay;
   if(hasDay){
@@ -641,6 +693,7 @@ function valuesFor(i,ignoreDay){
 function daysFor(){const m=new Map();for(let r=0;r<P.n;r++){if(!rowPass(r,'day'))continue;const d=P.dk[r];m.set(d,(m.get(d)||0)+1);}
   return[...m.entries()].sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0);}
 function itemsFromFile(){
+  prepBounds();
   const rows=[];for(let r=0;r<P.n;r++)if(rowPass(r))rows.push(r);
   const ordered=PC.day>=0||PC.time>=0;
   if(ordered)rows.sort((a,b)=>{const da=P.dk[a]||'',db=P.dk[b]||'';if(da!==db)return da<db?-1:1;const sa=P.sec[a],sb=P.sec[b];if(sa!=null&&sb!=null&&sa!==sb)return sa-sb;return a-b;});
@@ -922,7 +975,13 @@ function bindOpt(id,key,num){const el=$('#'+id);el.addEventListener(num?'input':
 bindOpt('oRet','ret');bindOpt('oFuture','future');bindOpt('oHeat','heat');
 
 // filtri
-$('#fItems').addEventListener('change',e=>{const s=e.target.closest('select[data-f]');if(!s)return;PC.filters[+s.dataset.f].val=s.value;refreshFilters();recompute();});
+$('#fItems').addEventListener('change',e=>{const el=e.target,d=el.dataset;
+  if(d.f!=null)PC.filters[+d.f].val=el.value;
+  else if(d.fm!=null){const f=PC.filters[+d.fm];f.mode=el.value;if(f.mode!=='eq')f.val='';}
+  else if(d.fmin!=null)PC.filters[+d.fmin].min=el.value;
+  else if(d.fmax!=null)PC.filters[+d.fmax].max=el.value;
+  else return;
+  refreshFilters();recompute();});
 $('#daySel').onchange=e=>{PC.dsel=e.target.value;refreshFilters();recompute();};
 function stepDay(dir){const o=[...$('#daySel').options].map(x=>x.value).filter(v=>v!=='*');if(!o.length)return;
   let i=o.indexOf(PC.dsel);i=i<0?(dir>0?0:o.length-1):Math.max(0,Math.min(o.length-1,i+dir));PC.dsel=o[i];refreshFilters();recompute();}
@@ -930,7 +989,7 @@ $('#dPrev').onclick=()=>stepDay(-1);$('#dNext').onclick=()=>stepDay(1);
 $('#cLoc').onchange=e=>{PC.loc=+e.target.value;PC.filters=PC.filters.filter(f=>f.col!==PC.loc);buildMappingUI();refreshFilters();recompute();};
 $('#cDay').onchange=e=>{PC.day=+e.target.value;PC.dsel='__first__';prepRows();buildMappingUI();refreshFilters();recompute();};
 $('#cTime').onchange=e=>{PC.time=+e.target.value;if(PC.day<0)PC.dsel='__first__';prepRows();buildMappingUI();refreshFilters();recompute();};
-$('#fAdd').onchange=e=>{const c=+e.target.value;if(e.target.value==='')return;PC.filters.push({col:c,val:''});buildMappingUI();refreshFilters();recompute();};
+$('#fAdd').onchange=e=>{const c=+e.target.value;if(e.target.value==='')return;PC.filters.push({col:c,val:'',mode:'eq',min:'',max:''});buildMappingUI();refreshFilters();recompute();};
 $('#fChips').onclick=e=>{const b=e.target.closest('button[data-rm]');if(!b)return;PC.filters.splice(+b.dataset.rm,1);buildMappingUI();refreshFilters();recompute();};
 $('#pClear').onclick=()=>{savedPC=pcToNames();P=null;pSource='manual';PB=null;$('#pFile').value='';$('#pMapping').hidden=true;$('#pSheetBox').hidden=true;$('#pInfo').innerHTML='';$('#fbar').hidden=true;$('#manualBox').open=true;recompute();};
 
