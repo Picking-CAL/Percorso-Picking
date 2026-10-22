@@ -93,7 +93,7 @@ canvas{display:block;touch-action:manipulation}
 .sw{width:13px;height:13px;border-radius:2px;display:inline-block}
 .sw.rack{background:var(--rack)} .sw.wall{background:var(--wall)} .sw.floor{background:var(--floor);border:1px solid var(--grid)}
 .ramp i{font-style:normal;font-variant-numeric:tabular-nums}
-.ramp b{display:inline-block;width:70px;height:6px;border-radius:3px;background:linear-gradient(90deg,rgb(255,236,140),rgb(253,190,80),rgb(244,109,67),rgb(214,32,32));box-shadow:0 0 0 1px var(--line)}
+.ramp b{display:inline-block;width:70px;height:6px;border-radius:3px;background:linear-gradient(90deg,rgb(255,255,255),rgb(240,220,180),rgb(255,214,51),rgb(255,140,26),rgb(222,32,27),rgb(122,10,10));box-shadow:0 0 0 1px var(--line)}
 .sw.dot{border-radius:50%;background:var(--done)} .sw.todo{border-radius:50%;border:2px solid var(--accent);background:var(--panel)}
 
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;display:flex;flex-direction:column;min-width:0}
@@ -288,7 +288,7 @@ ol.steps{list-style:none;margin:0;padding:0;max-height:560px;overflow:auto}
         <h3>Opzioni</h3>
         <label class="c"><input type="checkbox" id="oRet" checked><span>Ritorno al punto di arrivo (F) o alla partenza a fine giornata</span></label>
         <label class="c"><input type="checkbox" id="oFuture" checked><span>Mostra il percorso ancora da fare</span></label>
-        <label class="c"><input type="checkbox" id="oHeat"><span>Mappa dei passaggi: colora le corsie con la stessa scala del percorso, dal giallo (1 passaggio) al rosso (molti passaggi)</span></label>
+        <label class="c"><input type="checkbox" id="oHeat"><span>Mappa dei passaggi: colora le corsie con la stessa scala del percorso, dal bianco (1 passaggio) al rosso scuro (molti passaggi)</span></label>
         <p class="help">"Ordine più vicino" ricalcola gli stessi prelievi andando ogni volta all'ubicazione più vicina, giorno per giorno. Il confronto è in percentuale di percorso, quindi non dipende dalla scala della mappa.</p>
       </div>
     </aside>
@@ -655,7 +655,8 @@ function layout(){
   cv.style.width=W+'px';cv.style.height=H+'px';cv.width=Math.round(W*dpr);cv.height=Math.round(H*dpr);
   ctx.setTransform(dpr,0,0,dpr,0,0);
 }
-const RAMP=[[255,236,140],[253,190,80],[244,109,67],[214,32,32]];
+// bianco, beige, giallo, arancione, rosso, rosso scuro
+const RAMP=[[255,255,255],[240,220,180],[255,214,51],[255,140,26],[222,32,27],[122,10,10]];
 function passColor(n,cap){const f=cap<=1?0:Math.min(1,(Math.min(n,cap)-1)/(cap-1)),x=f*(RAMP.length-1),i=Math.min(RAMP.length-2,Math.floor(x)),u=x-i,a=RAMP[i],b=RAMP[i+1];
   return`rgb(${Math.round(a[0]+(b[0]-a[0])*u)},${Math.round(a[1]+(b[1]-a[1])*u)},${Math.round(a[2]+(b[2]-a[2])*u)})`;}
 function ctr(i){return[(i%G.cols+0.5)*CS,((i/G.cols|0)+0.5)*CS];}
@@ -691,12 +692,21 @@ function draw(){
     ctx.beginPath();const p0=pointAt(t);ctx.moveTo(p0[0],p0[1]);for(let k=Math.floor(t)+1;k<R.pts.length;k++){const c=ctr(R.pts[k]);ctx.lineTo(c[0],c[1]);}ctx.stroke();
     ctx.setLineDash([]);ctx.globalAlpha=1;}
   if(t>0){
+    // ogni tratto tra due celle sfuma dal colore della cella di partenza a quello della cella di arrivo
     const cap=R.cap,paths=[];for(let b=0;b<=cap;b++)paths.push(new Path2D());
-    const casing=new Path2D(),last=Math.floor(t);
-    for(let k=1;k<=last;k++){const a=ctr(R.pts[k-1]),c=ctr(R.pts[k]),b=Math.min(R.pc[k],cap);paths[b].moveTo(a[0],a[1]);paths[b].lineTo(c[0],c[1]);casing.moveTo(a[0],a[1]);casing.lineTo(c[0],c[1]);}
-    if(t>last&&last+1<R.pts.length){const a=ctr(R.pts[last]),pe=pointAt(t),b=Math.min(R.pc[last+1],cap);paths[b].moveTo(a[0],a[1]);paths[b].lineTo(pe[0],pe[1]);casing.moveTo(a[0],a[1]);casing.lineTo(pe[0],pe[1]);}
+    const casing=new Path2D(),last=Math.floor(t),blends=[];
+    const add=(k0,k1,a,c)=>{casing.moveTo(a[0],a[1]);casing.lineTo(c[0],c[1]);
+      const b0=Math.min(R.pc[k0],cap),b1=Math.min(R.pc[k1],cap);
+      if(b0===b1){paths[b1].moveTo(a[0],a[1]);paths[b1].lineTo(c[0],c[1]);}else blends.push([a,c,b0,b1]);};
+    for(let k=1;k<=last;k++)add(k-1,k,ctr(R.pts[k-1]),ctr(R.pts[k]));
+    if(t>last&&last+1<R.pts.length)add(last,last+1,ctr(R.pts[last]),pointAt(t));
     ctx.strokeStyle=TK.wall;ctx.globalAlpha=0.55;ctx.lineWidth=lw+2;ctx.stroke(casing);ctx.globalAlpha=1;
-    ctx.lineWidth=lw;for(let b=1;b<=cap;b++){ctx.strokeStyle=passColor(b,cap);ctx.stroke(paths[b]);}
+    ctx.lineWidth=lw;
+    for(let b=1;b<=cap;b++){ctx.strokeStyle=passColor(b,cap);ctx.stroke(paths[b]);}
+    ctx.lineCap='butt';
+    for(const [a,c,b0,b1] of blends){const g=ctx.createLinearGradient(a[0],a[1],c[0],c[1]);g.addColorStop(0,passColor(b0,cap));g.addColorStop(1,passColor(b1,cap));
+      ctx.strokeStyle=g;ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(c[0],c[1]);ctx.stroke();}
+    ctx.lineCap='round';
   }
   ctx.save();ctx.strokeStyle=TK.accent;ctx.lineWidth=Math.max(1,cs*0.07);ctx.setLineDash([Math.max(2,cs*0.12),Math.max(2,cs*0.12)]);ctx.globalAlpha=0.9;ctx.beginPath();
   R.segs.forEach(s=>{if(s.kind!=='pick'||s.status!=='ok'||t<s.b-1e-6)return;const a=ctr(R.pts[s.b]),b=ctr(s.idx);if(Math.abs(a[0]-b[0])+Math.abs(a[1]-b[1])<=cs*1.01)return;ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);});
