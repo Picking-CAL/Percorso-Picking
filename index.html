@@ -181,11 +181,11 @@ ol.steps{list-style:none;margin:0;padding:0;max-height:560px;overflow:auto}
 
   <dl class="stats" id="stats">
     <div class="stat"><dt>Prelievi totali</dt><dd id="sRows">–</dd></div>
+    <div class="stat"><dt>Tempo lavorato</dt><dd id="sReal">–</dd></div>
+    <div class="stat"><dt>Produttività</dt><dd id="sRate">–</dd></div>
+    <div class="stat"><dt>Tempo medio tra prelievi</dt><dd id="sGap">–</dd></div>
     <div class="stat"><dt>Ubicazioni visitate</dt><dd id="sPicks">–</dd></div>
     <div class="stat"><dt>Ubicazioni diverse</dt><dd id="sDistinct">–</dd></div>
-    <div class="stat"><dt>Tempo considerato</dt><dd id="sReal">–</dd></div>
-    <div class="stat"><dt>Ubicazioni all'ora</dt><dd id="sRate">–</dd></div>
-    <div class="stat"><dt>Tempo medio tra prelievi</dt><dd id="sGap">–</dd></div>
     <div class="stat"><dt id="sCmpLabel">Percorso con ordine più vicino</dt><dd id="sCmp">–</dd></div>
   </dl>
 
@@ -794,7 +794,7 @@ function renderStats(){
   ids[1].textContent=nf(new Set(items.map(i=>i.code)).size);
   const rd=realDuration(items);
   ids[2].textContent=rd==null||rd<=0?'–':fmtDur(rd);
-  ids[3].textContent=rd&&rd>0?(stops/(rd/3600)).toLocaleString('it-IT',{maximumFractionDigits:1}):'–';
+  ids[3].innerHTML=rd&&rd>0?(n/(rd/3600)).toLocaleString('it-IT',{maximumFractionDigits:1})+'<small>prelievi/h</small>':'–';
   const days=new Set(items.filter(i=>i.sec!=null).map(i=>i.dk)).size;
   ids[4].textContent=rd&&rd>0&&n-days>0?fmtGap(rd/(n-days)):'–';
   $('#sCmpLabel').textContent=mode==='given'?'Percorso con ordine più vicino':'Percorso con ordine reale';
