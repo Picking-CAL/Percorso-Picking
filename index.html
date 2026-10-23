@@ -29,6 +29,20 @@
   --accent:#F07A33; --accent-soft:#3A2618; --done:#4BB679; --bad:#E5584C; --heat:#F07A33; color-scheme:dark}
 
 *{box-sizing:border-box}
+.shell[data-view="heat"] .only-path,.shell[data-view="path"] .only-heat{display:none!important}
+.views{display:flex;align-items:center;gap:6px 18px;flex-wrap:wrap}
+.views .stripe{width:28px;height:22px;border-radius:2px;background:repeating-linear-gradient(-45deg,var(--accent) 0 5px,var(--ink) 5px 10px)}
+.views button{border:0;background:none;padding:2px 0 4px;cursor:pointer;font-family:var(--f-display);font-weight:700;font-size:clamp(24px,3.6vw,36px);line-height:1;text-transform:uppercase;letter-spacing:.01em;color:var(--muted);border-bottom:3px solid transparent}
+.views button:hover{color:var(--ink)}
+.views button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent)}
+.ftools{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px}
+.ftools .zoom{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+.ftools .zoom .ib{font-size:18px;font-weight:600;line-height:1}
+.seg.sm button{padding:5px 10px;font-size:13px}
+.rk .num{border:0;color:#1B2427;font-size:12px}
+.rk .hb{grid-column:2/4;height:4px;border-radius:2px;background:var(--paper);overflow:hidden}
+.rk .hb i{display:block;height:100%;background:var(--muted)}
+.rk.sel{background:var(--accent-soft)}
 [hidden]{display:none!important}
 body{background:var(--paper);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.45;
   padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 40px}
@@ -69,7 +83,7 @@ button,input,select,textarea{font:inherit;color:inherit}
 .layout{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:16px;align-items:start}
 @media (max-width:920px){.layout{grid-template-columns:minmax(0,1fr)}}
 .floor{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:10px;min-width:0}
-.canvas-wrap{overflow:auto;max-width:100%;border-radius:4px;line-height:0}
+.canvas-wrap{overflow:auto;max-width:100%;max-height:80vh;border-radius:4px;line-height:0}
 canvas{display:block;touch-action:manipulation}
 .floor{position:relative}
 .tip{position:absolute;z-index:5;pointer-events:none;background:var(--ink);color:var(--paper);border-radius:8px;padding:9px 11px;font-size:12.5px;line-height:1.45;max-width:270px;box-shadow:0 6px 20px rgba(0,0,0,.25)}
@@ -157,13 +171,18 @@ ol.steps{list-style:none;margin:0;padding:0;max-height:560px;overflow:auto}
 </style>
 </head>
 <body>
-<div class="shell">
+<div class="shell" id="shell" data-view="path">
   <header class="top">
     <div class="brand">
-      <h1><span class="stripe" aria-hidden="true"></span>Tracciato Picking</h1>
-      <p>Mappa del magazzino da Excel, prelievi del mese, percorso dell'operatore passo per passo.</p>
+      <nav class="views" role="tablist" aria-label="Vista">
+        <span class="stripe" aria-hidden="true"></span>
+        <button role="tab" data-view="path" aria-selected="true">Tracciato Picking</button>
+        <button role="tab" data-view="heat" aria-selected="false">Heat Map</button>
+      </nav>
+      <p class="only-path">Mappa del magazzino da Excel, prelievi del mese, percorso dell'operatore passo per passo.</p>
+      <p class="only-heat">Quante righe di prelievo cadono su ogni ubicazione, con i filtri scelti.</p>
     </div>
-    <div class="seg" role="group" aria-label="Ordine dei prelievi">
+    <div class="seg only-path" role="group" aria-label="Ordine dei prelievi">
       <button id="modeGiven" aria-pressed="true">Ordine reale</button>
       <button id="modeNN" aria-pressed="false">Ordine più vicino</button>
     </div>
@@ -183,7 +202,16 @@ ol.steps{list-style:none;margin:0;padding:0;max-height:560px;overflow:auto}
     <div class="fcount" id="fCount"></div>
   </section>
 
-  <dl class="stats" id="stats">
+  <dl class="stats only-heat" id="statsHeat">
+    <div class="stat"><dt>Prelievi totali</dt><dd id="hRows">–</dd></div>
+    <div class="stat"><dt>Ubicazioni con prelievi</dt><dd id="hActive">–</dd></div>
+    <div class="stat"><dt>Ubicazioni senza prelievi</dt><dd id="hZero">–</dd></div>
+    <div class="stat"><dt>Massimo su un'ubicazione</dt><dd id="hMax">–</dd></div>
+    <div class="stat"><dt>Media per ubicazione usata</dt><dd id="hAvg">–</dd></div>
+    <div class="stat"><dt>Prelievi sul 20% più usato</dt><dd id="hTop">–</dd></div>
+  </dl>
+
+  <dl class="stats only-path" id="stats">
     <div class="stat"><dt>Prelievi totali</dt><dd id="sRows">–</dd></div>
     <div class="stat"><dt>Tempo lavorato</dt><dd id="sReal">–</dd></div>
     <div class="stat"><dt>Produttività</dt><dd id="sRate">–</dd></div>
@@ -195,10 +223,21 @@ ol.steps{list-style:none;margin:0;padding:0;max-height:560px;overflow:auto}
 
   <main class="layout">
     <section class="floor" aria-label="Pianta del magazzino">
+      <div class="ftools">
+        <div class="seg sm only-heat" role="group" aria-label="Scala dei colori">
+          <button id="scLog" aria-pressed="true">Scala logaritmica</button>
+          <button id="scLin" aria-pressed="false">Scala lineare</button>
+        </div>
+        <div class="zoom" role="group" aria-label="Zoom mappa">
+          <button class="ib sm" id="zOut" aria-label="Riduci">−</button>
+          <span id="zLbl">100%</span>
+          <button class="ib sm" id="zIn" aria-label="Ingrandisci">+</button>
+        </div>
+      </div>
       <div class="canvas-wrap" id="wrap"><canvas id="cv" aria-label="Mappa del magazzino con il percorso dell'operatore"></canvas></div>
       <div class="tip" id="tip" hidden></div>
       <div class="hover" id="hover">Passa sopra la mappa per leggere cella Excel e ubicazione.</div>
-      <div class="controls">
+      <div class="controls only-path">
         <div class="btns">
           <button class="ib" id="bStart" aria-label="Torna alla partenza"><svg viewBox="0 0 24 24"><path d="M6 5h2v14H6zM20 5v14L9 12z"/></svg></button>
           <button class="ib" id="bPrev" aria-label="Prelievo precedente"><svg viewBox="0 0 24 24"><path d="M18 5v14L7 12z"/></svg></button>
@@ -214,12 +253,14 @@ ol.steps{list-style:none;margin:0;padding:0;max-height:560px;overflow:auto}
       </div>
       <div class="legend">
         <span><i class="sw floor"></i>Corsia</span>
-        <span><i class="sw rack"></i>Ubicazione</span>
+        <span class="only-path"><i class="sw rack"></i>Ubicazione</span>
         <span><i class="sw wall"></i>Muro / ostacolo</span>
         <span><i class="sw sep"></i>Separatore</span>
-        <span class="ramp">Passaggi sulla stessa cella <i>1</i><b aria-hidden="true"></b><i id="capLbl">5+</i></span>
-        <span><i class="sw dot"></i>Prelevato</span>
-        <span><i class="sw todo"></i>Da prelevare</span>
+        <span class="ramp only-path">Passaggi sulla stessa cella <i>1</i><b aria-hidden="true"></b><i id="capLbl">5+</i></span>
+        <span class="only-path"><i class="sw dot"></i>Prelevato</span>
+        <span class="only-path"><i class="sw todo"></i>Da prelevare</span>
+        <span class="ramp only-heat">Prelievi per ubicazione <i>1</i><b aria-hidden="true"></b><i id="hMaxLbl">–</i></span>
+        <span class="only-heat"><i class="sw rack" style="opacity:.4"></i>Nessun prelievo</span>
       </div>
     </section>
 
@@ -231,7 +272,7 @@ ol.steps{list-style:none;margin:0;padding:0;max-height:560px;overflow:auto}
         <button role="tab" aria-selected="false" data-tab="opt">Opzioni</button>
       </div>
 
-      <div class="tabpane" id="tab-steps" style="padding:0"><ol class="steps" id="steps"></ol></div>
+      <div class="tabpane" id="tab-steps" style="padding:0"><ol class="steps only-path" id="steps"></ol><ol class="steps only-heat" id="rank"></ol></div>
 
       <div class="tabpane" id="tab-picks" hidden>
         <h3>File dei prelievi</h3>
@@ -327,14 +368,16 @@ function sampleRows(){
 function samplePicks(){
   let seed=11;const rnd=()=>(seed=(seed*16807)%2147483647)/2147483647;
   const locs=[];'ABCDEF'.split('').forEach(L=>{for(let n=1;n<=24;n++)locs.push(L+'-'+String(n).padStart(2,'0'));});
-  const ops=['ROSSI','BIANCHI','VERDI'],days=[['01/10/2026',0],['02/10/2026',1]];
+  // ubicazioni ordinate per "popolarità": le più vicine al fronte (righe basse) e alle testate escono più spesso
+  const hot=locs.slice().sort((x,y)=>{const nx=+x.slice(2),ny=+y.slice(2);const sx=Math.abs(13-nx)+(x[0]>'C'?3:0),sy=Math.abs(13-ny)+(y[0]>'C'?3:0);return sx-sy||(x<y?-1:1);});
+  const ops=['ROSSI','BIANCHI','VERDI'],days=[['01/10/2026',0],['02/10/2026',1],['05/10/2026',2],['06/10/2026',3]];
   const arts=['MED-1042','MED-2210','MED-0877','MED-3315','MED-1190','MED-4402','MED-0631','MED-2786'];
   const rows=[];
   days.forEach(([d,di])=>ops.forEach((op,oi)=>{
-    let s=6*3600+oi*420+Math.floor(rnd()*300);const n=9+Math.floor(rnd()*6);
+    let s=6*3600+oi*420+Math.floor(rnd()*300);const n=14+Math.floor(rnd()*10);
     for(let k=0;k<n;k++){s+=60+Math.floor(rnd()*200);
       const hh=String(Math.floor(s/3600)).padStart(2,'0'),mm=String(Math.floor(s/60)%60).padStart(2,'0'),ss=String(s%60).padStart(2,'0');
-      rows.push({k:di*1e6+s,r:[d,`${hh}:${mm}:${ss}`,op,locs[Math.floor(rnd()*locs.length)],arts[Math.floor(rnd()*arts.length)],String(1+Math.floor(rnd()*6))]});}
+      rows.push({k:di*1e6+s,r:[d,`${hh}:${mm}:${ss}`,op,hot[Math.floor(Math.pow(rnd(),1.7)*hot.length)],arts[Math.floor(rnd()*arts.length)],String(1+Math.floor(rnd()*6))]});}
   }));
   rows.sort((a,b)=>a.k-b.k);
   return[['Data','Ora','Operatore','Ubicazione','Articolo','Qtà'],...rows.map(x=>x.r)];
@@ -546,14 +589,14 @@ function nearestByDay(items){
 }
 
 /* ---------- stato ---------- */
-let mapBorders=[],G=null,RG=null,RN=null,R=null,mode='given',origin={r:0,c:0};
-let opts={mpc:1,kmh:3.6,ret:true,future:true,heat:false,speed:8};
+let view='path',HM=null,hlIdx=-1,zoom=1,mapBorders=[],G=null,RG=null,RN=null,R=null,mode='given',origin={r:0,c:0};
+let opts={mpc:1,kmh:3.6,ret:true,future:true,heat:false,speed:8,hscale:'log'};
 let P=null,PC={loc:-1,day:-1,time:-1,filters:[],dsel:''},pSource='sample',savedPC=null,curItems=[],itemsInfo={};
 let t=0,playing=false,dwell=0,lastTs=0,CS=20,TK={};
 const cv=$('#cv'),ctx=cv.getContext('2d'),wrap=$('#wrap');
 
 function pcToNames(){if(!P)return savedPC;const h=P.headers;return{loc:h[PC.loc]??null,day:h[PC.day]??null,time:h[PC.time]??null,filters:PC.filters.map(f=>({name:h[f.col],val:f.val,mode:f.mode||'eq',min:f.min||'',max:f.max||''})),dsel:PC.dsel};}
-function save(){try{localStorage.setItem(LS,JSON.stringify({map:$('#mapTA').value,borders:mapBorders,seq:$('#seqTA').value,opts,origin,mode,pSource,pc:pcToNames()}));}catch(e){}}
+function save(){try{localStorage.setItem(LS,JSON.stringify({view,zoom,map:$('#mapTA').value,borders:mapBorders,seq:$('#seqTA').value,opts,origin,mode,pSource,pc:pcToNames()}));}catch(e){}}
 function load(){try{const s=JSON.parse(localStorage.getItem(LS)||'null');if(s&&s.map)return s;}catch(e){}return null;}
 
 const esc=s=>String(s).replace(/[&<>"]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
@@ -708,8 +751,30 @@ function applyMap(){
   m.innerHTML=`<div class="msg ${G.start<0?'':'ok'}">${G.rows} righe × ${G.cols} colonne · ${nf(G.loc.size)} ubicazioni${G.nSep?' · '+nf(G.nSep)+' tratti di separatore':(mapFromXlsx?' · nessun bordo tratteggiato trovato':'')}${G.start<0?' · <b>Manca la partenza</b>: scrivi S in una cella di corsia. Per ora l\'operatore parte dal primo prelievo.':''}</div>`;
   recompute();
 }
+function computeHeat(items){
+  const N=G.rows*G.cols,cnt=new Uint32Array(N);let inMap=0;
+  for(const it of items)if(it.idx>=0){cnt[it.idx]++;inMap++;}
+  const list=[];let cells=0;
+  for(let i=0;i<N;i++){if(G.type[i]!==2)continue;cells++;if(cnt[i])list.push([i,cnt[i]]);}
+  list.sort((a,b)=>b[1]-a[1]);
+  const top=Math.max(1,Math.ceil(cells*0.2));let topSum=0;for(let k=0;k<Math.min(top,list.length);k++)topSum+=list[k][1];
+  return{cnt,list,cells,inMap,total:items.length,max:list.length?list[0][1]:0,topSum,top};
+}
+function recomputeHeat(){
+  stop();R=null;
+  let items,h='';
+  if(P){items=itemsFromFile();$('#fCount').className='fcount';$('#fCount').innerHTML=`<b>${nf(items.length)}</b> prelievi selezionati`;}
+  else items=parseSeq($('#seqTA').value);
+  curItems=items;HM=computeHeat(items);
+  const miss=items.filter(i=>i.idx<0);
+  if(!items.length)h=P?'<div class="msg info">Nessun prelievo con questi filtri.</div>':'<div class="msg">Nessuna ubicazione nella sequenza.</div>';
+  else if(miss.length){const u=[...new Set(miss.map(i=>i.raw))];h=`<div class="msg">${nf(miss.length)} prelievi con ubicazione non trovata in mappa: ${u.slice(0,12).map(x=>'<b>'+esc(x)+'</b>').join(', ')}${u.length>12?' e altre '+(u.length-12):''}.</div>`;}
+  $('#seqMsg').innerHTML=h;
+  renderAll();save();
+}
 function recompute(){
-  if(!G){renderAll();return;}
+  if(!G){HM=null;renderAll();return;}
+  if(view==='heat'){recomputeHeat();return;}
   let items,h='';
   if(P){
     items=itemsFromFile();
@@ -744,7 +809,8 @@ function layout(){
   const avail=Math.max(200,wrap.clientWidth);
   let cs=Math.floor(avail/G.cols);
   const maxH=Math.max(320,window.innerHeight*0.72);
-  cs=Math.min(cs,Math.floor(maxH/G.rows),44);cs=Math.max(cs,9);CS=cs;
+  cs=Math.min(cs,Math.floor(maxH/G.rows),44);cs=Math.max(cs,9);cs=Math.max(6,Math.min(96,Math.round(cs*zoom)));CS=cs;
+  $('#zLbl').textContent=Math.round(zoom*100)+'%';
   const dpr=window.devicePixelRatio||1,W=G.cols*cs,H=G.rows*cs;
   cv.style.width=W+'px';cv.style.height=H+'px';cv.width=Math.round(W*dpr);cv.height=Math.round(H*dpr);
   ctx.setTransform(dpr,0,0,dpr,0,0);
@@ -753,6 +819,22 @@ function layout(){
 const RAMP=[[255,255,255],[240,220,180],[255,214,51],[255,140,26],[222,32,27],[122,10,10]];
 function passColor(n,cap){const f=cap<=1?0:Math.min(1,(Math.min(n,cap)-1)/(cap-1)),x=f*(RAMP.length-1),i=Math.min(RAMP.length-2,Math.floor(x)),u=x-i,a=RAMP[i],b=RAMP[i+1];
   return`rgb(${Math.round(a[0]+(b[0]-a[0])*u)},${Math.round(a[1]+(b[1]-a[1])*u)},${Math.round(a[2]+(b[2]-a[2])*u)})`;}
+function rampRGB(f){f=Math.max(0,Math.min(1,f));const x=f*(RAMP.length-1),i=Math.min(RAMP.length-2,Math.floor(x)),u=x-i,a=RAMP[i],b=RAMP[i+1];
+  return[Math.round(a[0]+(b[0]-a[0])*u),Math.round(a[1]+(b[1]-a[1])*u),Math.round(a[2]+(b[2]-a[2])*u)];}
+function heatRGB(v){const mx=HM?HM.max:0;let f=0;if(mx>1)f=opts.hscale==='lin'?(v-1)/(mx-1):Math.log(v)/Math.log(mx);return rampRGB(f);}
+const css=c=>`rgb(${c[0]},${c[1]},${c[2]})`;
+const inkOn=c=>(0.2126*c[0]+0.7152*c[1]+0.0722*c[2])<150?'#FFFFFF':'#1B2427';
+function drawHeatCell(i,x,y,cs){
+  const v=HM?HM.cnt[i]:0;
+  if(!v){ctx.globalAlpha=0.4;ctx.fillStyle=TK.rack;ctx.fillRect(x,y,cs,cs);ctx.globalAlpha=1;ctx.strokeStyle=TK['rack-edge'];ctx.lineWidth=1;ctx.strokeRect(x+.5,y+.5,cs-1,cs-1);return;}
+  const c=heatRGB(v);ctx.fillStyle=css(c);ctx.fillRect(x,y,cs,cs);
+  ctx.strokeStyle='rgba(0,0,0,.22)';ctx.lineWidth=1;ctx.strokeRect(x+.5,y+.5,cs-1,cs-1);
+  if(cs<12)return;
+  const txt=nf(v);let fs=Math.min(cs*0.46,18);ctx.font=`600 ${fs}px "Barlow Condensed",sans-serif`;
+  while(ctx.measureText(txt).width>cs-3&&fs>6){fs-=0.5;ctx.font=`600 ${fs}px "Barlow Condensed",sans-serif`;}
+  if(ctx.measureText(txt).width>cs-2)return;
+  ctx.fillStyle=inkOn(c);ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(txt,x+cs/2,y+cs/2+1);
+}
 function ctr(i){return[(i%G.cols+0.5)*CS,((i/G.cols|0)+0.5)*CS];}
 function pointAt(tt){const p=R.pts,i=Math.min(Math.floor(tt),p.length-1),j=Math.min(i+1,p.length-1),f=tt-i;const a=ctr(p[i]),b=ctr(p[j]);return[a[0]+(b[0]-a[0])*f,a[1]+(b[1]-a[1])*f];}
 function curSeg(){if(!R)return null;return R.segs.find(s=>s.status==='ok'&&t<s.b-1e-6)||null;}
@@ -766,11 +848,12 @@ function draw(){
   for(let c=1;c<G.cols;c++){ctx.moveTo(c*cs+.5,0);ctx.lineTo(c*cs+.5,h);}
   for(let r=1;r<G.rows;r++){ctx.moveTo(0,r*cs+.5);ctx.lineTo(w,r*cs+.5);}
   ctx.stroke();
-  if(opts.heat&&R&&R.heat){let mx=0;for(let i=0;i<N;i++)if(G.walk[i]&&R.heat[i]>mx)mx=R.heat[i];
+  if(view==='path'&&opts.heat&&R&&R.heat){let mx=0;for(let i=0;i<N;i++)if(G.walk[i]&&R.heat[i]>mx)mx=R.heat[i];
     if(mx>0){ctx.globalAlpha=0.6;for(let i=0;i<N;i++){const v=R.heat[i];if(!v||!G.walk[i])continue;ctx.fillStyle=passColor(v,R.cap);ctx.fillRect((i%G.cols)*cs,(i/G.cols|0)*cs,cs,cs);}ctx.globalAlpha=1;}}
   for(let i=0;i<N;i++){
     const ty=G.type[i];if(!ty)continue;const x=(i%G.cols)*cs,y=(i/G.cols|0)*cs;
     if(ty===1){ctx.fillStyle=TK.wall;ctx.fillRect(x,y,cs,cs);}
+    else if(ty===2&&view==='heat'){drawHeatCell(i,x,y,cs);}
     else if(ty===2){ctx.fillStyle=TK.rack;ctx.fillRect(x,y,cs,cs);ctx.strokeStyle=TK['rack-edge'];ctx.lineWidth=1;ctx.strokeRect(x+.5,y+.5,cs-1,cs-1);
       if(cs>=24){let fs=Math.min(11,cs*0.32);const txt=G.label[i];ctx.font=`500 ${fs}px "IBM Plex Mono",monospace`;let tw=ctx.measureText(txt).width;
         while(tw>cs-4&&fs>7){fs-=0.5;ctx.font=`500 ${fs}px "IBM Plex Mono",monospace`;tw=ctx.measureText(txt).width;}
@@ -784,6 +867,9 @@ function draw(){
     const w=Math.max(3,cs*0.2);ctx.lineCap='square';
     ctx.strokeStyle=TK.panel;ctx.lineWidth=w+2;ctx.stroke(sep);
     ctx.strokeStyle='#000';ctx.lineWidth=w;ctx.stroke(sep);ctx.lineCap='butt';}
+  if(view==='heat'){
+    if(hlIdx>=0&&G.type[hlIdx]===2){const x=(hlIdx%G.cols)*cs,y=(hlIdx/G.cols|0)*cs;ctx.lineWidth=3;ctx.strokeStyle=TK.accent;ctx.strokeRect(x-1.5,y-1.5,cs+3,cs+3);}
+    return;}
   if(!R||R.pts.length<1)return;
   const lw=Math.max(2,cs*0.16),cur=curSeg();
   ctx.lineJoin='round';ctx.lineCap='round';
@@ -894,7 +980,28 @@ function renderProgress(force){
   if(playing&&cur){const li=lis[R.segs.indexOf(cur)];if(li)li.scrollIntoView({block:'nearest'});}
 }
 function isSample(){return $('#mapTA').value===SAMPLE_MAP&&pSource==='sample';}
+function renderHeatStats(){
+  const ids=['hRows','hActive','hZero','hMax','hAvg','hTop'].map(i=>$('#'+i));
+  if(!HM){ids.forEach(e=>e.textContent='–');$('#hMaxLbl').textContent='–';return;}
+  ids[0].innerHTML=nf(HM.total)+(HM.inMap<HM.total?`<small>${nf(HM.inMap)} in mappa</small>`:'');
+  ids[1].innerHTML=nf(HM.list.length)+`<small>su ${nf(HM.cells)}</small>`;
+  ids[2].textContent=nf(HM.cells-HM.list.length);
+  ids[3].innerHTML=HM.max?nf(HM.max)+`<small>${esc(G.label[HM.list[0][0]])}</small>`:'–';
+  ids[4].textContent=HM.list.length?(HM.inMap/HM.list.length).toLocaleString('it-IT',{maximumFractionDigits:1}):'–';
+  ids[5].innerHTML=HM.inMap?Math.round(HM.topSum/HM.inMap*100)+'%'+`<small>${nf(HM.top)} ubicazioni</small>`:'–';
+  $('#hMaxLbl').textContent=HM.max?nf(HM.max):'–';
+}
+function renderRank(){
+  const ol=$('#rank');
+  if(!HM||!HM.list.length){ol.innerHTML=`<li class="empty">${P?'Nessun prelievo in mappa con i filtri scelti.':'Carica il file dei prelievi nella scheda Prelievi per vedere la classifica.'}</li>`;$('#tabStepsBtn').textContent='Classifica';return;}
+  const L=HM.list.slice(0,300);
+  ol.innerHTML=L.map(([i,v],k)=>{const c=heatRGB(v);
+    return `<li class="step rk ${i===hlIdx?'sel':''}" data-i="${i}"><span class="num" style="background:${css(c)};color:${inkOn(c)};box-shadow:inset 0 0 0 1px rgba(0,0,0,.18)">${k+1}</span><span class="code">${esc(G.label[i])}</span><span class="dist">${nf(v)}</span><span class="sub">Cella ${cellRef(i)} · ${(v/HM.inMap*100).toLocaleString('it-IT',{maximumFractionDigits:1})}% dei prelievi</span><span class="cum"></span></li>`;}).join('')+
+    (HM.list.length>300?`<li class="empty">Mostrate le prime 300 di ${nf(HM.list.length)} ubicazioni.</li>`:'');
+  $('#tabStepsBtn').textContent=`Classifica (${nf(HM.list.length)})`;
+}
 function renderAll(){
+  if(view==='heat'){$('#sampleNote').hidden=!isSample();layout();renderHeatStats();renderRank();draw();return;}
   $('#capLbl').textContent=R?(R.cap>=8?'8+':String(R.cap)):'5+';
   $('#sampleNote').hidden=!isSample();
   layout();renderStats();renderList();lastKey='';renderProgress(true);draw();
@@ -924,7 +1031,7 @@ $('#bPrev').onclick=()=>{if(!R)return;const p=R.stops.filter(b=>b<t-1e-6);jump(p
 $('#scrub').oninput=e=>{if(!R)return;const v=+e.target.value;jump(v?R.stops[v-1]:0);};
 $('#speed').oninput=e=>{opts.speed=+e.target.value;save();};
 $('#steps').onclick=e=>{const li=e.target.closest('.step');if(!li||!R)return;const s=R.segs[+li.dataset.k];if(s&&s.status==='ok')jump(s.b);};
-document.addEventListener('keydown',e=>{if(/INPUT|TEXTAREA|SELECT/.test(e.target.tagName))return;
+document.addEventListener('keydown',e=>{if(view==='heat'||/INPUT|TEXTAREA|SELECT/.test(e.target.tagName))return;
   if(e.key===' '){e.preventDefault();$('#bPlay').click();}else if(e.key==='ArrowRight')$('#bNext').click();else if(e.key==='ArrowLeft')$('#bPrev').click();});
 
 /* ---------- hover ---------- */
@@ -936,6 +1043,12 @@ function hoverAt(clientX,clientY){
   if(R&&R.heat&&R.heat[i]&&G.walk[i])d+=` · passaggi: ${R.heat[i]}`;
   $('#hover').textContent=`Cella ${cellRef(i)} · ${d}`;
   if(ty!==2){tip.hidden=true;return;}
+  if(view==='heat'){
+    const v=HM?HM.cnt[i]:0;let h=`<b>${esc(G.label[i])}</b> <span class="dim">· cella ${cellRef(i)}</span>`;
+    if(!v)h+=`<div class="dim" style="margin-top:4px">Nessun prelievo con i filtri scelti</div>`;
+    else{const rank=HM.list.findIndex(x=>x[0]===i)+1;
+      h+=`<div style="margin-top:4px"><b style="font-family:var(--f-display);font-size:18px">${nf(v)}</b> ${v===1?'prelievo':'prelievi'}</div><div class="dim">${(v/HM.inMap*100).toLocaleString('it-IT',{maximumFractionDigits:1})}% del totale · ${rank}ª di ${nf(HM.list.length)} ubicazioni usate</div>`;}
+    showTip(h,clientX,clientY);return;}
   const v=R?R.segs.filter(s=>s.idx===i&&s.kind==='pick'):[];
   let h=`<b>${esc(G.label[i])}</b> <span class="dim">· cella ${cellRef(i)}</span>`;
   if(!v.length)h+=`<div class="dim" style="margin-top:4px">Non visitata nei prelievi selezionati</div>`;
@@ -943,6 +1056,9 @@ function hoverAt(clientX,clientY){
     v.slice(0,8).map(s=>`<span>n. ${s.n}</span><span>${s.dk?fmtDayS(s.dk):''}</span><span>${s.time||''}${s.status!=='ok'?' ⚠':''}</span>`).join('')+'</div>'+
     (v.length>8?`<div class="dim">e altre ${v.length-8}</div>`:'')+
     (v.some(s=>s.status==='unreach')?'<div style="margin-top:4px">⚠ non raggiungibile: nessuna corsia collegata alla partenza senza passare da un muro X</div>':'');}
+  showTip(h,clientX,clientY);
+}
+function showTip(h,clientX,clientY){
   tip.innerHTML=h;tip.hidden=false;
   const fr=floorEl.getBoundingClientRect();let x=clientX-fr.left+16,y=clientY-fr.top+16;
   const tw=tip.offsetWidth,th=tip.offsetHeight;
@@ -954,6 +1070,17 @@ cv.addEventListener('mousemove',e=>hoverAt(e.clientX,e.clientY));
 cv.addEventListener('click',e=>hoverAt(e.clientX,e.clientY));
 cv.addEventListener('mouseleave',()=>{tip.hidden=true;});
 /* ---------- schede e comandi ---------- */
+function setView(v){view=v;$('#shell').dataset.view=v;stop();tip.hidden=true;
+  document.querySelectorAll('.views button').forEach(b=>b.setAttribute('aria-selected',b.dataset.view===v?'true':'false'));
+  recompute();}
+document.querySelectorAll('.views button').forEach(b=>b.onclick=()=>{if(b.dataset.view!==view)setView(b.dataset.view);});
+function setScale(sc){opts.hscale=sc;$('#scLog').setAttribute('aria-pressed',sc==='log');$('#scLin').setAttribute('aria-pressed',sc==='lin');renderAll();save();}
+$('#scLog').onclick=()=>setScale('log');$('#scLin').onclick=()=>setScale('lin');
+function setZoom(z){zoom=Math.max(0.5,Math.min(4,Math.round(z*100)/100));layout();draw();save();}
+$('#zIn').onclick=()=>setZoom(zoom*1.25);$('#zOut').onclick=()=>setZoom(zoom/1.25);
+$('#rank').onclick=e=>{const li=e.target.closest('.rk');if(!li)return;hlIdx=+li.dataset.i;
+  document.querySelectorAll('#rank .rk').forEach(x=>x.classList.toggle('sel',x===li));draw();
+  const x=(hlIdx%G.cols)*CS,y=(hlIdx/G.cols|0)*CS;wrap.scrollTo({left:Math.max(0,x-wrap.clientWidth/2),top:Math.max(0,y-wrap.clientHeight/2),behavior:'smooth'});};
 document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('.tabs button').forEach(x=>x.setAttribute('aria-selected',x===b?'true':'false'));
   ['steps','picks','map','opt'].forEach(k=>$('#tab-'+k).hidden=k!==b.dataset.tab);
@@ -1053,10 +1180,12 @@ $('#sheetMap').onchange=useMapSheet;
 
 /* ---------- avvio ---------- */
 const saved=load();
-if(saved){$('#mapTA').value=saved.map;$('#seqTA').value=saved.seq||'';Object.assign(opts,saved.opts||{});origin=saved.origin||origin;mapBorders=saved.borders||[];mode=saved.mode==='nn'?'nn':'given';pSource=saved.pSource||'manual';}
+if(saved){$('#mapTA').value=saved.map;$('#seqTA').value=saved.seq||'';Object.assign(opts,saved.opts||{});origin=saved.origin||origin;mapBorders=saved.borders||[];view=saved.view==='heat'?'heat':'path';zoom=+saved.zoom||1;mode=saved.mode==='nn'?'nn':'given';pSource=saved.pSource||'manual';}
 else{$('#mapTA').value=SAMPLE_MAP;$('#seqTA').value=SAMPLE_SEQ;pSource='sample';}
 $('#oRet').checked=opts.ret;$('#oFuture').checked=opts.future;$('#oHeat').checked=opts.heat;$('#speed').value=opts.speed;
-setModeButtons();readTokens();
+setModeButtons();readTokens();$('#shell').dataset.view=view;
+document.querySelectorAll('.views button').forEach(b=>b.setAttribute('aria-selected',b.dataset.view===view?'true':'false'));
+$('#scLog').setAttribute('aria-pressed',opts.hscale!=='lin');$('#scLin').setAttribute('aria-pressed',opts.hscale==='lin');
 G=buildGrid(parseTSV($('#mapTA').value),mapBorders);accessCache.clear();
 if(pSource==='sample'){loadSamplePicks();}
 else{savedPC=saved&&saved.pc||null;$('#manualBox').open=true;
